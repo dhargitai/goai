@@ -1,0 +1,11 @@
+id,text,category,subcategory,confidence,keywords,process_time,cost
+1,New AI framework released for Go developers. Features include type-safe agents and structured outputs.,Technology,Software Development,high,"[""AI framework"",""Go developers"",""type-safe agents"",""structured outputs""]",0.906,0.000567
+3,Breakthrough in cancer research: New treatment shows 80% success rate in clinical trials.,Science,Medical Research,high,"[""cancer research"",""treatment"",""clinical trials"",""success rate""]",2.019,0.000570
+4,Scientists discover new exoplanet in habitable zone. Could support liquid water.,Science,Astronomy,high,"[""exoplanet"",""habitable zone"",""liquid water"",""scientists"",""discovery""]",1.457,0.000615
+6,Machine learning model achieves human-level performance on complex reasoning tasks.,Technology,Artificial Intelligence,High,"[""machine learning"",""human-level performance"",""complex reasoning tasks""]",0.814,0.000535
+2,Global markets rise as tech stocks surge. Major indices gain 2% on strong earnings reports.,Finance,Stock Market,High,"[""Global markets"",""tech stocks"",""indices"",""earnings reports"",""stocks""]",3.390,0.000583
+5,Local startup raises $10M in Series A funding. Plans to expand to three new markets.,Business,Investment/Funding,High,"[""Local startup"",""Series A funding"",""$10M"",""expand"",""three new markets""]",1.700,0.000623
+7,Heart disease prevention: New study reveals importance of regular exercise and diet.,Health,Cardiovascular Health,High,"[""Heart disease"",""prevention"",""exercise"",""diet"",""study""]",0.914,0.000570
+8,Quantum computing advance brings practical applications closer to reality.,Technology,Computing,high,"[""Quantum computing"",""practical applications"",""reality""]",0.801,0.000520
+9,E-commerce platform reports 150% growth in Q4. Mobile shopping drives increase.,Business,E-commerce,high,"[""E-commerce platform"",""150% growth"",""Q4"",""mobile shopping""]",0.999,0.000577
+10,NASA announces mission to explore Jupiter's moon Europa. Launch scheduled for 2027.,Science and Technology,Space Exploration,High,"[""NASA"",""mission"",""explore"",""Jupiter's moon Europa"",""Europa"",""launch"",""2027""]",1.843,0.000657
