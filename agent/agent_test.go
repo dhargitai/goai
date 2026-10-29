@@ -720,37 +720,32 @@ func TestAgent_Tool_Execution(t *testing.T) {
 	}
 }
 
-func TestConvertSchemaToMap(t *testing.T) {
-	mockProvider := mock.New()
-	deps := SimpleDeps{}
+func TestRun_SendsResultSchema(t *testing.T) {
+	var got *provider.ResponseFormat
+	mockProvider := mock.New().
+		WithResponse(&provider.Response{Content: `{"name":"a","age":1,"tags":[],"score":1}`}).
+		WithRequestCallback(func(ctx context.Context, req *provider.Request) {
+			got = req.ResponseFormat
+		})
 
-	agent, err := NewAgent[SimpleDeps, ComplexResult](
-		mockProvider,
-		"Test",
-		deps,
-	)
+	agent, err := NewAgent[SimpleDeps, ComplexResult](mockProvider, "Test", SimpleDeps{})
 	if err != nil {
 		t.Fatalf("NewAgent() unexpected error = %v", err)
 	}
-
-	schemaMap := convertSchemaToMap(agent.resultSchema)
-
-	// Verify schema structure
-	if schemaMap["type"] != "object" {
-		t.Errorf("schema type = %v, want %v", schemaMap["type"], "object")
+	if _, err := agent.Run(context.Background(), "hi"); err != nil {
+		t.Fatalf("Run() unexpected error = %v", err)
 	}
 
-	props, ok := schemaMap["properties"].(map[string]any)
-	if !ok {
-		t.Fatalf("schema properties not a map")
+	if got == nil || got.Schema == nil {
+		t.Fatalf("request has no result schema")
 	}
-
-	// Check for expected properties
-	expectedProps := []string{"name", "age", "tags", "score"}
-	for _, prop := range expectedProps {
-		if _, exists := props[prop]; !exists {
+	for _, prop := range []string{"name", "age", "tags", "score"} {
+		if _, exists := got.Schema.Properties[prop]; !exists {
 			t.Errorf("schema missing property: %s", prop)
 		}
+	}
+	if got.Schema.Properties["name"].Description != "Person's name" {
+		t.Errorf("description tag not applied: %+v", got.Schema.Properties["name"])
 	}
 }
 

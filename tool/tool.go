@@ -90,7 +90,7 @@ func (r *Registry) Register(name, description string, handler any) error {
 		// No arguments besides context
 		paramSchema = &schema.Schema{
 			Type:       "object",
-			Properties: make(map[string]schema.Property),
+			Properties: make(map[string]*schema.Schema),
 			Required:   []string{},
 		}
 	}

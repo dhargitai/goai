@@ -3,7 +3,6 @@ package openai
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -12,15 +11,6 @@ import (
 	"github.com/dhargitai/goai/tool"
 	openai "github.com/sashabaranov/go-openai"
 )
-
-// jsonSchemaWrapper wraps a map to implement json.Marshaler
-type jsonSchemaWrapper struct {
-	schema map[string]any
-}
-
-func (j jsonSchemaWrapper) MarshalJSON() ([]byte, error) {
-	return json.Marshal(j.schema)
-}
 
 // Config holds configuration for the OpenAI client.
 // Use functional options with New() to configure the client.
@@ -163,26 +153,14 @@ func (c *Client) Request(ctx context.Context, req *provider.Request) (*provider.
 
 	// Add response format if provided
 	if req.ResponseFormat != nil {
-		respFormat := &openai.ChatCompletionResponseFormat{
-			Type: openai.ChatCompletionResponseFormatType(req.ResponseFormat.Type),
-		}
-
-		// If using json_schema type, add the schema details
-		if req.ResponseFormat.Type == "json_schema" && req.ResponseFormat.JSONSchema != nil {
-			// Extract name from the schema if available, otherwise use a default
-			name := "response"
-			if n, ok := req.ResponseFormat.JSONSchema["name"].(string); ok && n != "" {
-				name = n
-			}
-
-			respFormat.JSONSchema = &openai.ChatCompletionResponseFormatJSONSchema{
-				Name:   name,
-				Schema: jsonSchemaWrapper{schema: req.ResponseFormat.JSONSchema},
+		chatReq.ResponseFormat = &openai.ChatCompletionResponseFormat{
+			Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
+			JSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+				Name:   req.ResponseFormat.Name,
+				Schema: req.ResponseFormat.Schema.Strict(),
 				Strict: true,
-			}
+			},
 		}
-
-		chatReq.ResponseFormat = respFormat
 	}
 
 	// Make request
@@ -265,26 +243,14 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (*provider.S
 
 	// Add response format if provided
 	if req.ResponseFormat != nil {
-		respFormat := &openai.ChatCompletionResponseFormat{
-			Type: openai.ChatCompletionResponseFormatType(req.ResponseFormat.Type),
-		}
-
-		// If using json_schema type, add the schema details
-		if req.ResponseFormat.Type == "json_schema" && req.ResponseFormat.JSONSchema != nil {
-			// Extract name from the schema if available, otherwise use a default
-			name := "response"
-			if n, ok := req.ResponseFormat.JSONSchema["name"].(string); ok && n != "" {
-				name = n
-			}
-
-			respFormat.JSONSchema = &openai.ChatCompletionResponseFormatJSONSchema{
-				Name:   name,
-				Schema: jsonSchemaWrapper{schema: req.ResponseFormat.JSONSchema},
+		chatReq.ResponseFormat = &openai.ChatCompletionResponseFormat{
+			Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
+			JSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+				Name:   req.ResponseFormat.Name,
+				Schema: req.ResponseFormat.Schema.Strict(),
 				Strict: true,
-			}
+			},
 		}
-
-		chatReq.ResponseFormat = respFormat
 	}
 
 	// Create cancellable context for cleanup
@@ -451,32 +417,13 @@ func convertTools(tools []tool.Definition) []openai.Tool {
 	result := make([]openai.Tool, len(tools))
 
 	for i, t := range tools {
-		// Convert parameters to the expected format
-		// Ensure properties is always a valid object, not nil
-		// Convert to map[string]interface{} to ensure proper JSON serialization
-		properties := make(map[string]any)
-		for k, v := range t.Parameters.Properties {
-			properties[k] = v
-		}
-
-		// Ensure required is always a valid array, not nil
-		required := t.Parameters.Required
-		if required == nil {
-			required = []string{}
-		}
-
-		params := map[string]any{
-			"type":       "object",
-			"properties": properties,
-			"required":   required,
-		}
-
 		result[i] = openai.Tool{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        t.Name,
 				Description: t.Description,
-				Parameters:  params,
+				Parameters:  t.Parameters.Strict(),
+				Strict:      true,
 			},
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/dhargitai/goai/message"
+	"github.com/dhargitai/goai/schema"
 	"github.com/dhargitai/goai/tool"
 )
 
@@ -96,11 +97,11 @@ type Chunk struct {
 	FinishReason string
 }
 
-// ResponseFormat specifies the format for structured output.
+// ResponseFormat requests structured JSON output matching a schema.
 type ResponseFormat struct {
-	// Type is typically "json_object" or "json_schema"
-	Type string
+	// Name identifies the output schema to the model
+	Name string
 
-	// JSONSchema is the schema for structured output (optional)
-	JSONSchema map[string]any
+	// Schema is the JSON schema the output must follow
+	Schema *schema.Schema
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,307 +20,252 @@ type StructWithDescription struct {
 	Email string `json:"email" description:"Email address"`
 }
 
-type StructWithRequired struct {
-	Name  string `json:"name" validate:"required"`
-	Email string `json:"email" validate:"required"`
-	Phone string `json:"phone"`
-}
-
 type StructWithEnum struct {
-	Role string `json:"role" enum:"admin,user,guest"`
+	Role     string `json:"role" enum:"admin,user,guest"`
+	Priority int    `json:"priority" enum:"1, 2, 3"`
 }
 
-type NestedStruct struct {
-	User    SimpleStruct `json:"user"`
-	Active  bool         `json:"active"`
-	Counter int          `json:"counter"`
+type Location struct {
+	City    string `json:"city" description:"City name"`
+	Country string `json:"country"`
 }
 
-type StructWithSlice struct {
-	Tags  []string `json:"tags"`
-	Items []int    `json:"items"`
+type Weather struct {
+	Location Location   `json:"location"`
+	History  []Location `json:"history"`
+	Temp     float64    `json:"temp"`
 }
 
-type StructWithMap struct {
-	Metadata map[string]string `json:"metadata"`
+type StructWithOptional struct {
+	Name     string    `json:"name"`
+	Nickname *string   `json:"nickname"`
+	Note     string    `json:"note,omitempty"`
+	Level    *string   `json:"level" enum:"low,high"`
+	At       time.Time `json:"at"`
+	Ignored  string    `json:"-"`
+	private  string
+}
+
+type Base struct {
+	ID string `json:"id"`
+}
+
+type StructWithEmbedded struct {
+	Base
+	Name string `json:"name"`
+}
+
+type Recursive struct {
+	Children []Recursive `json:"children"`
 }
 
 func TestGenerate_SimpleStruct(t *testing.T) {
-	schema, err := Generate(reflect.TypeFor[SimpleStruct]())
+	s, err := Generate(reflect.TypeFor[SimpleStruct]())
 	require.NoError(t, err)
-	require.NotNil(t, schema)
 
-	assert.Equal(t, "object", schema.Type)
-	assert.NotNil(t, schema.Properties)
-	assert.Contains(t, schema.Properties, "name")
-	assert.Contains(t, schema.Properties, "age")
-
-	nameProp := schema.Properties["name"]
-	assert.Equal(t, "string", nameProp.Type)
-
-	ageProp := schema.Properties["age"]
-	assert.Equal(t, "integer", ageProp.Type)
+	assert.Equal(t, "object", s.Type)
+	assert.Equal(t, "string", s.Properties["name"].Type)
+	assert.Equal(t, "integer", s.Properties["age"].Type)
+	assert.Equal(t, []string{"name", "age"}, s.Required)
 }
 
-func TestGenerate_WithDescription(t *testing.T) {
-	schema, err := Generate(reflect.TypeFor[StructWithDescription]())
+func TestGenerate_DescriptionTag(t *testing.T) {
+	s, err := Generate(reflect.TypeFor[StructWithDescription]())
 	require.NoError(t, err)
-	require.NotNil(t, schema)
 
-	assert.Contains(t, schema.Properties, "name")
-	nameProp := schema.Properties["name"]
-	// Note: invopop/jsonschema doesn't automatically parse custom `description` tags
-	// We would need custom reflection logic for that, which could be added later
-	assert.Equal(t, "string", nameProp.Type)
+	assert.Equal(t, "Person's full name", s.Properties["name"].Description)
+	assert.Equal(t, "Email address", s.Properties["email"].Description)
 }
 
-func TestGenerate_NestedStruct(t *testing.T) {
-	schema, err := Generate(reflect.TypeFor[NestedStruct]())
+func TestGenerate_EnumTag(t *testing.T) {
+	s, err := Generate(reflect.TypeFor[StructWithEnum]())
 	require.NoError(t, err)
-	require.NotNil(t, schema)
 
-	assert.Equal(t, "object", schema.Type)
-	assert.Contains(t, schema.Properties, "user")
-	assert.Contains(t, schema.Properties, "active")
-	assert.Contains(t, schema.Properties, "counter")
-
-	userProp := schema.Properties["user"]
-	assert.Equal(t, "object", userProp.Type)
-
-	activeProp := schema.Properties["active"]
-	assert.Equal(t, "boolean", activeProp.Type)
+	assert.Equal(t, []any{"admin", "user", "guest"}, s.Properties["role"].Enum)
+	assert.Equal(t, []any{int64(1), int64(2), int64(3)}, s.Properties["priority"].Enum)
 }
 
-func TestGenerate_WithSlice(t *testing.T) {
-	schema, err := Generate(reflect.TypeFor[StructWithSlice]())
+func TestGenerate_InvalidEnumValue(t *testing.T) {
+	type bad struct {
+		N int `json:"n" enum:"one"`
+	}
+	_, err := Generate(reflect.TypeFor[bad]())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid enum value")
+}
+
+// Regression: nested struct fields used to be collapsed into an empty object,
+// so strict structured output could not return them.
+func TestGenerate_NestedStructKeepsFields(t *testing.T) {
+	s, err := Generate(reflect.TypeFor[Weather]())
 	require.NoError(t, err)
-	require.NotNil(t, schema)
 
-	assert.Contains(t, schema.Properties, "tags")
-	assert.Contains(t, schema.Properties, "items")
-
-	tagsProp := schema.Properties["tags"]
-	assert.Equal(t, "array", tagsProp.Type)
-	assert.NotNil(t, tagsProp.Items)
-	assert.Equal(t, "string", tagsProp.Items.Type)
-
-	itemsProp := schema.Properties["items"]
-	assert.Equal(t, "array", itemsProp.Type)
-	assert.NotNil(t, itemsProp.Items)
-	assert.Equal(t, "integer", itemsProp.Items.Type)
-}
-
-func TestGenerate_PrimitiveTypes(t *testing.T) {
-	tests := []struct {
-		name     string
-		value    any
-		wantType string
-	}{
-		{
-			name:     "string",
-			value:    "",
-			wantType: "string",
-		},
-		{
-			name:     "int",
-			value:    0,
-			wantType: "integer",
-		},
-		{
-			name:     "float64",
-			value:    0.0,
-			wantType: "number",
-		},
-		{
-			name:     "bool",
-			value:    false,
-			wantType: "boolean",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			schema, err := GenerateFromValue(tt.value)
-			require.NoError(t, err)
-			require.NotNil(t, schema)
-			assert.Equal(t, tt.wantType, schema.Type)
-		})
-	}
-}
-
-func TestGenerate_Array(t *testing.T) {
-	schema, err := GenerateFromValue([]string{})
-	require.NoError(t, err)
-	require.NotNil(t, schema)
-
-	assert.Equal(t, "array", schema.Type)
-	assert.NotNil(t, schema.Items)
-	assert.Equal(t, "string", schema.Items.Type)
-}
-
-func TestGenerate_NilType(t *testing.T) {
-	schema, err := Generate(nil)
-	assert.Error(t, err)
-	assert.Nil(t, schema)
-	assert.Contains(t, err.Error(), "cannot be nil")
-}
-
-func TestGenerateFromValue_NilValue(t *testing.T) {
-	schema, err := GenerateFromValue(nil)
-	assert.Error(t, err)
-	assert.Nil(t, schema)
-	assert.Contains(t, err.Error(), "cannot be nil")
-}
-
-func TestSchema_JSON(t *testing.T) {
-	tests := []struct {
-		name    string
-		schema  *Schema
-		wantErr bool
-	}{
-		{
-			name: "simple schema",
-			schema: &Schema{
-				Type: "object",
-				Properties: map[string]Property{
-					"name": {
-						Type:        "string",
-						Description: "Name field",
-					},
-					"age": {
-						Type: "integer",
-					},
-				},
-				Required: []string{"name"},
-			},
-			wantErr: false,
-		},
-		{
-			name: "schema with enum",
-			schema: &Schema{
-				Type: "object",
-				Properties: map[string]Property{
-					"role": {
-						Type: "string",
-						Enum: []any{"admin", "user", "guest"},
-					},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "schema with array items",
-			schema: &Schema{
-				Type: "object",
-				Properties: map[string]Property{
-					"tags": {
-						Type: "array",
-						Items: &Property{
-							Type: "string",
-						},
-					},
-				},
-			},
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Marshal to JSON
-			data, err := json.Marshal(tt.schema)
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-
-			// Unmarshal back
-			var got Schema
-			err = json.Unmarshal(data, &got)
-			require.NoError(t, err)
-
-			// Compare
-			assert.Equal(t, tt.schema.Type, got.Type)
-			assert.Equal(t, len(tt.schema.Properties), len(got.Properties))
-			assert.Equal(t, tt.schema.Required, got.Required)
-		})
-	}
-}
-
-func TestGenerate_ComplexExample(t *testing.T) {
-	type Address struct {
-		Street  string `json:"street"`
-		City    string `json:"city"`
-		ZipCode string `json:"zip_code"`
-	}
-
-	type User struct {
-		Name    string   `json:"name"`
-		Email   string   `json:"email"`
-		Age     int      `json:"age"`
-		Active  bool     `json:"active"`
-		Address Address  `json:"address"`
-		Tags    []string `json:"tags"`
-	}
-
-	schema, err := Generate(reflect.TypeFor[User]())
-	require.NoError(t, err)
-	require.NotNil(t, schema)
-
-	assert.Equal(t, "object", schema.Type)
-
-	// Check all top-level properties exist
-	assert.Contains(t, schema.Properties, "name")
-	assert.Contains(t, schema.Properties, "email")
-	assert.Contains(t, schema.Properties, "age")
-	assert.Contains(t, schema.Properties, "active")
-	assert.Contains(t, schema.Properties, "address")
-	assert.Contains(t, schema.Properties, "tags")
-
-	// Check nested address object
-	addressProp := schema.Properties["address"]
-	assert.Equal(t, "object", addressProp.Type)
-
-	// Check array type
-	tagsProp := schema.Properties["tags"]
-	assert.Equal(t, "array", tagsProp.Type)
-	assert.NotNil(t, tagsProp.Items)
-	assert.Equal(t, "string", tagsProp.Items.Type)
-}
-
-func TestParseEnumTag(t *testing.T) {
 	tests := []struct {
 		name string
-		tag  string
-		want []any
+		got  *Schema
 	}{
-		{
-			name: "simple enum",
-			tag:  "admin,user,guest",
-			want: []any{"admin", "user", "guest"},
-		},
-		{
-			name: "enum with spaces",
-			tag:  "admin, user, guest",
-			want: []any{"admin", "user", "guest"},
-		},
-		{
-			name: "single value",
-			tag:  "admin",
-			want: []any{"admin"},
-		},
-		{
-			name: "empty tag",
-			tag:  "",
-			want: nil,
-		},
+		{name: "nested struct", got: s.Properties["location"]},
+		{name: "slice of structs", got: s.Properties["history"].Items},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NotNil(t, tt.got)
+			assert.Equal(t, "object", tt.got.Type)
+			require.Contains(t, tt.got.Properties, "city")
+			assert.Equal(t, "string", tt.got.Properties["city"].Type)
+			assert.Equal(t, "City name", tt.got.Properties["city"].Description)
+			assert.Equal(t, []string{"city", "country"}, tt.got.Required)
+		})
+	}
+}
+
+func TestGenerate_FieldHandling(t *testing.T) {
+	s, err := Generate(reflect.TypeFor[StructWithOptional]())
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"name", "at"}, s.Required)
+	assert.NotContains(t, s.Properties, "Ignored")
+	assert.NotContains(t, s.Properties, "private")
+	assert.Equal(t, "string", s.Properties["nickname"].Type)
+	assert.Equal(t, "date-time", s.Properties["at"].Format)
+}
+
+func TestGenerate_EmbeddedStructIsFlattened(t *testing.T) {
+	s, err := Generate(reflect.TypeFor[StructWithEmbedded]())
+	require.NoError(t, err)
+
+	assert.Contains(t, s.Properties, "id")
+	assert.Contains(t, s.Properties, "name")
+	assert.NotContains(t, s.Properties, "Base")
+}
+
+func TestGenerate_RecursiveTypeErrors(t *testing.T) {
+	_, err := Generate(reflect.TypeFor[Recursive]())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "recursive type")
+}
+
+func TestGenerate_NonStructTypes(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     any
+		wantType  string
+		wantItems string
+	}{
+		{name: "string", value: "", wantType: "string"},
+		{name: "int", value: 0, wantType: "integer"},
+		{name: "float64", value: 0.0, wantType: "number"},
+		{name: "bool", value: false, wantType: "boolean"},
+		{name: "string slice", value: []string{}, wantType: "array", wantItems: "string"},
+		{name: "byte slice", value: []byte{}, wantType: "string"},
+		{name: "map", value: map[string]int{}, wantType: "object"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseEnumTag(tt.tag)
-			assert.Equal(t, tt.want, got)
+			s, err := GenerateFromValue(tt.value)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantType, s.Type)
+			if tt.wantItems != "" {
+				require.NotNil(t, s.Items)
+				assert.Equal(t, tt.wantItems, s.Items.Type)
+			}
 		})
 	}
+}
+
+func TestGenerate_NilInputs(t *testing.T) {
+	_, err := Generate(nil)
+	assert.ErrorContains(t, err, "cannot be nil")
+
+	_, err = GenerateFromValue(nil)
+	assert.ErrorContains(t, err, "cannot be nil")
+}
+
+func TestGenerate_UnsupportedType(t *testing.T) {
+	_, err := GenerateFromValue(make(chan int))
+	assert.ErrorContains(t, err, "unsupported type")
+}
+
+func TestSchema_Strict(t *testing.T) {
+	s, err := Generate(reflect.TypeFor[StructWithOptional]())
+	require.NoError(t, err)
+
+	strict := s.Strict()
+
+	require.NotNil(t, strict.AdditionalProperties)
+	assert.False(t, *strict.AdditionalProperties)
+	assert.ElementsMatch(t, []string{"name", "nickname", "note", "level", "at"}, strict.Required)
+	assert.False(t, strict.Properties["name"].Nullable)
+	assert.True(t, strict.Properties["nickname"].Nullable)
+	assert.True(t, strict.Properties["note"].Nullable)
+	assert.Equal(t, []any{"low", "high", nil}, strict.Properties["level"].Enum)
+
+	// The original schema is not modified.
+	assert.Equal(t, []string{"name", "at"}, s.Required)
+	assert.False(t, s.Properties["nickname"].Nullable)
+	assert.Nil(t, s.AdditionalProperties)
+}
+
+func TestSchema_StrictNested(t *testing.T) {
+	s, err := Generate(reflect.TypeFor[Weather]())
+	require.NoError(t, err)
+
+	strict := s.Strict()
+	for _, nested := range []*Schema{strict.Properties["location"], strict.Properties["history"].Items} {
+		require.NotNil(t, nested.AdditionalProperties)
+		assert.False(t, *nested.AdditionalProperties)
+		assert.ElementsMatch(t, []string{"city", "country"}, nested.Required)
+	}
+}
+
+func TestSchema_MarshalJSON(t *testing.T) {
+	closed := false
+	tests := []struct {
+		name   string
+		schema *Schema
+		want   string
+	}{
+		{
+			name:   "nullable string",
+			schema: &Schema{Type: "string", Nullable: true},
+			want:   `{"type":["string","null"]}`,
+		},
+		{
+			name:   "empty object keeps properties and required",
+			schema: &Schema{Type: "object", AdditionalProperties: &closed},
+			want:   `{"type":"object","properties":{},"required":[],"additionalProperties":false}`,
+		},
+		{
+			name:   "untyped",
+			schema: &Schema{},
+			want:   `{}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := json.Marshal(tt.schema)
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.want, string(got))
+		})
+	}
+}
+
+func TestSchema_JSONRoundTrip(t *testing.T) {
+	s, err := Generate(reflect.TypeFor[StructWithOptional]())
+	require.NoError(t, err)
+	strict := s.Strict()
+
+	data, err := json.Marshal(strict)
+	require.NoError(t, err)
+
+	var got Schema
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, strict, &got)
+}
+
+func TestSchema_UnmarshalInvalidType(t *testing.T) {
+	var s Schema
+	err := json.Unmarshal([]byte(`{"type":42}`), &s)
+	assert.ErrorContains(t, err, "invalid schema type")
 }

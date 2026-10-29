@@ -191,8 +191,8 @@ func (a *Agent[Deps, Result]) Run(ctx context.Context, userPrompt string) (*RunR
 		// Add structured output format if Result is not string
 		if a.resultType.Kind() != reflect.String {
 			req.ResponseFormat = &provider.ResponseFormat{
-				Type:       "json_schema",
-				JSONSchema: convertSchemaToMap(a.resultSchema),
+				Name:   "result",
+				Schema: a.resultSchema,
 			}
 		}
 
@@ -326,8 +326,8 @@ func (a *Agent[Deps, Result]) RunStream(ctx context.Context, userPrompt string) 
 			// Add structured output format if Result is not string
 			if a.resultType.Kind() != reflect.String {
 				req.ResponseFormat = &provider.ResponseFormat{
-					Type:       "json_schema",
-					JSONSchema: convertSchemaToMap(a.resultSchema),
+					Name:   "result",
+					Schema: a.resultSchema,
 				}
 			}
 
@@ -562,72 +562,6 @@ func (a *Agent[Deps, Result]) createToolHandler(handlerValue reflect.Value, hand
 	}
 
 	return wrapper
-}
-
-// convertSchemaToMap converts a Schema to a map for provider requests.
-func convertSchemaToMap(s *schema.Schema) map[string]any {
-	result := make(map[string]any)
-
-	if s.Type != "" {
-		result["type"] = s.Type
-		// OpenAI strict mode requires additionalProperties: false for all objects
-		if s.Type == "object" {
-			result["additionalProperties"] = false
-		}
-	}
-
-	if s.Description != "" {
-		result["description"] = s.Description
-	}
-
-	if len(s.Properties) > 0 {
-		props := make(map[string]any)
-		// OpenAI strict mode requires all properties to be in required array
-		allRequired := make([]string, 0, len(s.Properties))
-
-		for key, prop := range s.Properties {
-			propMap := make(map[string]any)
-			if prop.Type != "" {
-				propMap["type"] = prop.Type
-				// OpenAI strict mode requires additionalProperties: false for all objects
-				if prop.Type == "object" {
-					propMap["additionalProperties"] = false
-				}
-			}
-			if prop.Description != "" {
-				propMap["description"] = prop.Description
-			}
-			if len(prop.Enum) > 0 {
-				propMap["enum"] = prop.Enum
-			}
-			if prop.Items != nil {
-				itemMap := make(map[string]any)
-				if prop.Items.Type != "" {
-					itemMap["type"] = prop.Items.Type
-					// OpenAI strict mode requires additionalProperties: false for all objects
-					if prop.Items.Type == "object" {
-						itemMap["additionalProperties"] = false
-					}
-				}
-				propMap["items"] = itemMap
-			}
-			props[key] = propMap
-			allRequired = append(allRequired, key)
-		}
-		result["properties"] = props
-		// For OpenAI structured outputs, all properties must be required
-		result["required"] = allRequired
-	}
-
-	if s.Items != nil {
-		result["items"] = convertSchemaToMap(s.Items)
-	}
-
-	if len(s.Enum) > 0 {
-		result["enum"] = s.Enum
-	}
-
-	return result
 }
 
 // calculateCost estimates the cost based on token usage and model name.
