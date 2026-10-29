@@ -18,16 +18,16 @@ type Schema struct {
 	Required    []string            `json:"required,omitempty"`
 	Description string              `json:"description,omitempty"`
 	Items       *Schema             `json:"items,omitempty"`
-	Enum        []interface{}       `json:"enum,omitempty"`
+	Enum        []any               `json:"enum,omitempty"`
 }
 
 // Property represents a property within a JSON schema.
 type Property struct {
-	Type        string        `json:"type,omitempty"`
-	Description string        `json:"description,omitempty"`
-	Enum        []interface{} `json:"enum,omitempty"`
-	Items       *Property     `json:"items,omitempty"`
-	Format      string        `json:"format,omitempty"`
+	Type        string    `json:"type,omitempty"`
+	Description string    `json:"description,omitempty"`
+	Enum        []any     `json:"enum,omitempty"`
+	Items       *Property `json:"items,omitempty"`
+	Format      string    `json:"format,omitempty"`
 }
 
 // Generate creates a JSON schema from a Go type using reflection.
@@ -52,7 +52,7 @@ func Generate(t reflect.Type) (*Schema, error) {
 	}
 
 	// Handle pointer types
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 
@@ -235,7 +235,7 @@ func convertProperty(value *jsonschema.Schema, parent *jsonschema.Schema, reflec
 
 // GenerateFromValue creates a JSON schema from a Go value.
 // This is a convenience function that extracts the type from the value.
-func GenerateFromValue(v interface{}) (*Schema, error) {
+func GenerateFromValue(v any) (*Schema, error) {
 	if v == nil {
 		return nil, fmt.Errorf("value cannot be nil")
 	}
@@ -257,13 +257,13 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 }
 
 // parseEnumTag parses comma-separated enum values from a struct tag.
-func parseEnumTag(tag string) []interface{} {
+func parseEnumTag(tag string) []any {
 	if tag == "" {
 		return nil
 	}
 
 	parts := strings.Split(tag, ",")
-	enum := make([]interface{}, len(parts))
+	enum := make([]any, len(parts))
 	for i, part := range parts {
 		enum[i] = strings.TrimSpace(part)
 	}

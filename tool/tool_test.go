@@ -30,8 +30,8 @@ func noArgsHandler(ctx context.Context) (string, error) {
 	return "No args", nil
 }
 
-func complexHandler(ctx context.Context, args ComplexArgs) (map[string]interface{}, error) {
-	return map[string]interface{}{
+func complexHandler(ctx context.Context, args ComplexArgs) (map[string]any, error) {
+	return map[string]any{
 		"query":   args.Query,
 		"count":   len(args.Filters),
 		"limited": args.Limit > 0,
@@ -210,7 +210,7 @@ func TestRegistry_Execute_ComplexArgs(t *testing.T) {
 	result, err := reg.Execute(context.Background(), "search", argsJSON)
 	require.NoError(t, err)
 
-	resultMap, ok := result.(map[string]interface{})
+	resultMap, ok := result.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "test query", resultMap["query"])
 	assert.Equal(t, 2, resultMap["count"])

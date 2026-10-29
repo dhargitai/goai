@@ -740,7 +740,7 @@ func TestConvertSchemaToMap(t *testing.T) {
 		t.Errorf("schema type = %v, want %v", schemaMap["type"], "object")
 	}
 
-	props, ok := schemaMap["properties"].(map[string]interface{})
+	props, ok := schemaMap["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("schema properties not a map")
 	}

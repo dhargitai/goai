@@ -45,7 +45,7 @@ type StructWithMap struct {
 }
 
 func TestGenerate_SimpleStruct(t *testing.T) {
-	schema, err := Generate(reflect.TypeOf(SimpleStruct{}))
+	schema, err := Generate(reflect.TypeFor[SimpleStruct]())
 	require.NoError(t, err)
 	require.NotNil(t, schema)
 
@@ -62,7 +62,7 @@ func TestGenerate_SimpleStruct(t *testing.T) {
 }
 
 func TestGenerate_WithDescription(t *testing.T) {
-	schema, err := Generate(reflect.TypeOf(StructWithDescription{}))
+	schema, err := Generate(reflect.TypeFor[StructWithDescription]())
 	require.NoError(t, err)
 	require.NotNil(t, schema)
 
@@ -74,7 +74,7 @@ func TestGenerate_WithDescription(t *testing.T) {
 }
 
 func TestGenerate_NestedStruct(t *testing.T) {
-	schema, err := Generate(reflect.TypeOf(NestedStruct{}))
+	schema, err := Generate(reflect.TypeFor[NestedStruct]())
 	require.NoError(t, err)
 	require.NotNil(t, schema)
 
@@ -91,7 +91,7 @@ func TestGenerate_NestedStruct(t *testing.T) {
 }
 
 func TestGenerate_WithSlice(t *testing.T) {
-	schema, err := Generate(reflect.TypeOf(StructWithSlice{}))
+	schema, err := Generate(reflect.TypeFor[StructWithSlice]())
 	require.NoError(t, err)
 	require.NotNil(t, schema)
 
@@ -112,7 +112,7 @@ func TestGenerate_WithSlice(t *testing.T) {
 func TestGenerate_PrimitiveTypes(t *testing.T) {
 	tests := []struct {
 		name     string
-		value    interface{}
+		value    any
 		wantType string
 	}{
 		{
@@ -201,7 +201,7 @@ func TestSchema_JSON(t *testing.T) {
 				Properties: map[string]Property{
 					"role": {
 						Type: "string",
-						Enum: []interface{}{"admin", "user", "guest"},
+						Enum: []any{"admin", "user", "guest"},
 					},
 				},
 			},
@@ -263,7 +263,7 @@ func TestGenerate_ComplexExample(t *testing.T) {
 		Tags    []string `json:"tags"`
 	}
 
-	schema, err := Generate(reflect.TypeOf(User{}))
+	schema, err := Generate(reflect.TypeFor[User]())
 	require.NoError(t, err)
 	require.NotNil(t, schema)
 
@@ -292,22 +292,22 @@ func TestParseEnumTag(t *testing.T) {
 	tests := []struct {
 		name string
 		tag  string
-		want []interface{}
+		want []any
 	}{
 		{
 			name: "simple enum",
 			tag:  "admin,user,guest",
-			want: []interface{}{"admin", "user", "guest"},
+			want: []any{"admin", "user", "guest"},
 		},
 		{
 			name: "enum with spaces",
 			tag:  "admin, user, guest",
-			want: []interface{}{"admin", "user", "guest"},
+			want: []any{"admin", "user", "guest"},
 		},
 		{
 			name: "single value",
 			tag:  "admin",
-			want: []interface{}{"admin"},
+			want: []any{"admin"},
 		},
 		{
 			name: "empty tag",

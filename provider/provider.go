@@ -102,5 +102,5 @@ type ResponseFormat struct {
 	Type string
 
 	// JSONSchema is the schema for structured output (optional)
-	JSONSchema map[string]interface{}
+	JSONSchema map[string]any
 }

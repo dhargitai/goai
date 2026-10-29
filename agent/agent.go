@@ -565,8 +565,8 @@ func (a *Agent[Deps, Result]) createToolHandler(handlerValue reflect.Value, hand
 }
 
 // convertSchemaToMap converts a Schema to a map for provider requests.
-func convertSchemaToMap(s *schema.Schema) map[string]interface{} {
-	result := make(map[string]interface{})
+func convertSchemaToMap(s *schema.Schema) map[string]any {
+	result := make(map[string]any)
 
 	if s.Type != "" {
 		result["type"] = s.Type
@@ -581,12 +581,12 @@ func convertSchemaToMap(s *schema.Schema) map[string]interface{} {
 	}
 
 	if len(s.Properties) > 0 {
-		props := make(map[string]interface{})
+		props := make(map[string]any)
 		// OpenAI strict mode requires all properties to be in required array
 		allRequired := make([]string, 0, len(s.Properties))
 
 		for key, prop := range s.Properties {
-			propMap := make(map[string]interface{})
+			propMap := make(map[string]any)
 			if prop.Type != "" {
 				propMap["type"] = prop.Type
 				// OpenAI strict mode requires additionalProperties: false for all objects
@@ -601,7 +601,7 @@ func convertSchemaToMap(s *schema.Schema) map[string]interface{} {
 				propMap["enum"] = prop.Enum
 			}
 			if prop.Items != nil {
-				itemMap := make(map[string]interface{})
+				itemMap := make(map[string]any)
 				if prop.Items.Type != "" {
 					itemMap["type"] = prop.Items.Type
 					// OpenAI strict mode requires additionalProperties: false for all objects

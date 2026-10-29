@@ -182,10 +182,7 @@ func (p *Provider) SetStreamResponse(content string) {
 	var chunks []*provider.Chunk
 
 	for i := 0; i < len(content); i += chunkSize {
-		end := i + chunkSize
-		if end > len(content) {
-			end = len(content)
-		}
+		end := min(i+chunkSize, len(content))
 		chunks = append(chunks, &provider.Chunk{
 			Content: content[i:end],
 		})

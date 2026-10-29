@@ -15,7 +15,7 @@ import (
 
 // jsonSchemaWrapper wraps a map to implement json.Marshaler
 type jsonSchemaWrapper struct {
-	schema map[string]interface{}
+	schema map[string]any
 }
 
 func (j jsonSchemaWrapper) MarshalJSON() ([]byte, error) {
@@ -454,7 +454,7 @@ func convertTools(tools []tool.Definition) []openai.Tool {
 		// Convert parameters to the expected format
 		// Ensure properties is always a valid object, not nil
 		// Convert to map[string]interface{} to ensure proper JSON serialization
-		properties := make(map[string]interface{})
+		properties := make(map[string]any)
 		for k, v := range t.Parameters.Properties {
 			properties[k] = v
 		}
@@ -465,7 +465,7 @@ func convertTools(tools []tool.Definition) []openai.Tool {
 			required = []string{}
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"type":       "object",
 			"properties": properties,
 			"required":   required,

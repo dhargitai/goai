@@ -159,13 +159,13 @@ func validateHandlerSignature(handlerType reflect.Type) error {
 	}
 
 	// First parameter must be context.Context
-	ctxType := reflect.TypeOf((*context.Context)(nil)).Elem()
+	ctxType := reflect.TypeFor[context.Context]()
 	if !handlerType.In(0).Implements(ctxType) {
 		return fmt.Errorf("first parameter must be context.Context, got %s", handlerType.In(0))
 	}
 
 	// Last return value must be error
-	errorType := reflect.TypeOf((*error)(nil)).Elem()
+	errorType := reflect.TypeFor[error]()
 	if !handlerType.Out(1).Implements(errorType) {
 		return fmt.Errorf("second return value must be error, got %s", handlerType.Out(1))
 	}
