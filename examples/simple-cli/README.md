@@ -55,30 +55,31 @@ All of this happens in a single `Run()` call!
 
 ### Example 2: Streaming Execution ⭐
 
-Shows real-time streaming responses using channels:
+Shows real-time streaming with a range-over-func iterator. It uses a second
+agent with a plain `string` result, because only text results stream token by
+token; structured results arrive whole in the final event.
 
 **Streaming Features:**
 - Real-time content delivery as tokens arrive
 - Tool execution notifications during streaming
-- Graceful context cancellation
+- Stop any time with `break` (the request is cancelled, nothing leaks)
 - Final result with complete metadata
 
 **How it Works:**
 ```go
-streamResult, err := ag.RunStream(ctx, userQuery)
-defer streamResult.Close()
-
-// Consume chunks in real-time
-for chunk := range streamResult.Chunks() {
-    if chunk.IsToolExecution {
-        fmt.Printf("[Calling tool: %s]\n", chunk.ToolName)
-    } else if chunk.Content != "" {
-        fmt.Print(chunk.Content) // Print as tokens arrive
+for ev, err := range ag.RunStream(ctx, userQuery) {
+    if err != nil {
+        log.Fatal(err)
+    }
+    switch {
+    case ev.ToolName != "":
+        fmt.Printf("[Calling tool: %s]\n", ev.ToolName)
+    case ev.Content != "":
+        fmt.Print(ev.Content) // Print as tokens arrive
+    case ev.Result != nil:
+        fmt.Println(ev.Result.Usage.TotalTokens) // Final result with usage stats
     }
 }
-
-// Get final result with usage stats
-result, err := streamResult.Result()
 ```
 
 ## Expected Output

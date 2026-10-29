@@ -12,7 +12,7 @@ Thank you for your interest in contributing to GoAI! This document provides guid
 
 ### Prerequisites
 
-- Go 1.22 or later
+- Go 1.26 or later
 - OpenAI API key (for testing)
 - Familiarity with Go best practices
 

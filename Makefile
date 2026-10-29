@@ -1,16 +1,16 @@
-.PHONY: build test test-coverage test-race fmt lint vet clean help
+.PHONY: build test test-coverage test-race integration fmt lint vet vuln clean deps check help
 
 # Default target
 .DEFAULT_GOAL := help
 
-# Build all examples
+# Build all examples (api and pipeline are separate modules)
 build: ## Build all example binaries
 	@echo "Building CLI example..."
-	@go build -o bin/cli examples/cli/main.go
+	@go build -o bin/cli ./examples/simple-cli
 	@echo "Building API example..."
-	@go build -o bin/api examples/api/main.go
+	@cd examples/api && go build -o ../../bin/api ./cmd/server
 	@echo "Building pipeline example..."
-	@go build -o bin/pipeline examples/pipeline/main.go
+	@cd examples/pipeline && go build -o ../../bin/pipeline ./cmd/pipeline
 	@echo "Build complete!"
 
 # Run all tests
@@ -30,6 +30,11 @@ test-race: ## Run tests with race detector
 	@echo "Running tests with race detector..."
 	@go test ./... -race
 
+# Run live tests against the OpenAI API (needs OPENAI_API_KEY; costs a little)
+integration: ## Run integration tests against the OpenAI API
+	@echo "Running integration tests..."
+	@go test -tags=integration -count=1 ./provider/openai/...
+
 # Format code
 fmt: ## Format all Go code
 	@echo "Formatting code..."
@@ -45,6 +50,13 @@ lint: ## Run golangci-lint
 vet: ## Run go vet
 	@echo "Running go vet..."
 	@go vet ./...
+
+# Scan all modules for known vulnerabilities
+vuln: ## Run govulncheck on the library and examples
+	@echo "Scanning for vulnerabilities..."
+	@go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	@cd examples/api && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	@cd examples/pipeline && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 # Clean build artifacts
 clean: ## Clean build artifacts

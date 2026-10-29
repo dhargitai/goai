@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.25.4-alpine3.22 AS builder
+FROM golang:1.27.2-alpine3.24 AS builder
 
 # Set up directory structure matching the replace directive (../..)
 WORKDIR /workspace/examples/api
@@ -23,7 +23,7 @@ COPY examples/api/ .
 RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server/main.go
 
 # Production stage
-FROM alpine:3.22
+FROM alpine:3.24
 
 WORKDIR /app
 
