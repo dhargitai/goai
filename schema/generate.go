@@ -168,7 +168,7 @@ func jsonFieldName(field reflect.StructField) (name, opts string, skip bool) {
 		return "", "", true
 	}
 	name, opts, _ = strings.Cut(tag, ",")
-	if !field.IsExported() && !(field.Anonymous && name == "") {
+	if !field.IsExported() && (!field.Anonymous || name != "") {
 		return "", "", true
 	}
 	return name, opts, false

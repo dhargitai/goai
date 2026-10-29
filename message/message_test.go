@@ -190,7 +190,7 @@ func TestNewAssistantMessageWithToolCalls(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := NewAssistantMessageWithToolCalls(tt.toolCalls)
+			got := NewAssistantMessageWithToolCalls(tt.toolCalls, nil)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -265,7 +265,7 @@ func TestMessage_JSON(t *testing.T) {
 						Arguments: `{"arg":"value"}`,
 					},
 				},
-			}),
+			}, nil),
 			wantErr: false,
 		},
 		{
@@ -338,4 +338,17 @@ func TestRoleConstants(t *testing.T) {
 	assert.Equal(t, "user", RoleUser)
 	assert.Equal(t, "assistant", RoleAssistant)
 	assert.Equal(t, "tool", RoleTool)
+}
+
+func TestNewAssistantMessageWithToolCalls_ProviderItems(t *testing.T) {
+	items := []json.RawMessage{json.RawMessage(`{"type":"reasoning"}`)}
+	got := NewAssistantMessageWithToolCalls(nil, items)
+	assert.Equal(t, items, got.ProviderItems)
+}
+
+func TestUsage_Add(t *testing.T) {
+	u := &Usage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3, CachedPromptTokens: 1}
+	u.Add(&Usage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30, CachedPromptTokens: 5})
+	u.Add(nil)
+	assert.Equal(t, &Usage{PromptTokens: 11, CompletionTokens: 22, TotalTokens: 33, CachedPromptTokens: 6}, u)
 }

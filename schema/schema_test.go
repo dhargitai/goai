@@ -120,7 +120,7 @@ func TestGenerate_NestedStructKeepsFields(t *testing.T) {
 }
 
 func TestGenerate_FieldHandling(t *testing.T) {
-	s, err := Generate(reflect.TypeFor[StructWithOptional]())
+	s, err := GenerateFromValue(StructWithOptional{Name: "n", private: "hidden"})
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"name", "at"}, s.Required)

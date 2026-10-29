@@ -91,9 +91,14 @@ Always provide your answer in the structured format requested.`
 	fmt.Println("=== Example 1: Regular Execution ===")
 	runRegularExample(ctx, ag)
 
-	// Example 2: Streaming execution
+	// Example 2: Streaming execution. Plain-text (string) results stream as
+	// they are generated; structured results arrive whole at the end.
 	fmt.Println("\n\n=== Example 2: Streaming Execution ===")
-	runStreamingExample(ctx, ag)
+	storyteller, err := agent.NewAgent[AgentDeps, string](provider, "You are a concise storyteller.", deps)
+	if err != nil {
+		log.Fatalf("Failed to create storyteller agent: %v", err)
+	}
+	runStreamingExample(ctx, storyteller)
 }
 
 // runRegularExample demonstrates regular (non-streaming) agent execution
@@ -128,52 +133,31 @@ func runRegularExample(ctx context.Context, ag *agent.Agent[AgentDeps, Assistant
 }
 
 // runStreamingExample demonstrates streaming agent execution with real-time output
-func runStreamingExample(ctx context.Context, ag *agent.Agent[AgentDeps, AssistantResult]) {
+func runStreamingExample(ctx context.Context, ag *agent.Agent[AgentDeps, string]) {
 	userQuery := "Write a short story about a Go programmer discovering AI agents"
 
 	fmt.Printf("User: %s\n\n", userQuery)
 	fmt.Println("Assistant (streaming): ")
 
-	// Start streaming
-	streamResult, err := ag.RunStream(ctx, userQuery)
-	if err != nil {
-		log.Fatalf("Stream failed: %v", err)
-	}
-	defer streamResult.Close()
-
-	// Consume chunks in real-time
-	done := make(chan bool)
-	go func() {
-		for chunk := range streamResult.Chunks() {
-			if chunk.IsToolExecution {
-				// Tool execution notification
-				fmt.Printf("\n[Calling tool: %s]\n", chunk.ToolName)
-			} else if chunk.Content != "" {
-				// Stream content as it arrives
-				fmt.Print(chunk.Content)
-			}
+	var result *agent.RunResult[string]
+	for ev, err := range ag.RunStream(ctx, userQuery) {
+		if err != nil {
+			log.Fatalf("Stream failed: %v", err)
 		}
-		done <- true
-	}()
-
-	// Wait for streaming to complete
-	<-done
-
-	// Get final result
-	result, err := streamResult.Result()
-	if err != nil {
-		log.Fatalf("Failed to get result: %v", err)
+		switch {
+		case ev.ToolName != "":
+			fmt.Printf("\n[Calling tool: %s]\n", ev.ToolName)
+		case ev.Content != "":
+			fmt.Print(ev.Content)
+		case ev.Result != nil:
+			result = ev.Result
+		}
 	}
 
-	// Print usage stats
 	fmt.Printf("\n\n--- Usage Stats ---\n")
-	if result.Usage != nil {
-		fmt.Printf("Tokens: %d (prompt: %d, completion: %d)\n",
-			result.Usage.TotalTokens,
-			result.Usage.PromptTokens,
-			result.Usage.CompletionTokens)
-		fmt.Printf("Estimated Cost: $%.6f\n", result.Cost)
-	} else {
-		fmt.Println("Usage information not available")
-	}
+	fmt.Printf("Tokens: %d (prompt: %d, completion: %d)\n",
+		result.Usage.TotalTokens,
+		result.Usage.PromptTokens,
+		result.Usage.CompletionTokens)
+	fmt.Printf("Estimated Cost: $%.6f\n", result.Cost)
 }

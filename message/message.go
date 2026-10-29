@@ -2,6 +2,8 @@
 // between the user, assistant, and tools in AI agent conversations.
 package message
 
+import "encoding/json"
+
 // Message represents a single message in a conversation.
 // It can be from the system, user, assistant, or a tool response.
 type Message struct {
@@ -16,6 +18,11 @@ type Message struct {
 
 	// ToolCallID is the ID of the tool call this message is responding to (only for tool messages)
 	ToolCallID string `json:"tool_call_id,omitempty"`
+
+	// ProviderItems holds opaque, provider-specific output items that must be
+	// sent back unchanged on the next request (only for assistant messages),
+	// such as OpenAI's encrypted reasoning items.
+	ProviderItems []json.RawMessage `json:"provider_items,omitempty"`
 }
 
 // ToolCall represents a request to execute a function/tool.
@@ -50,6 +57,20 @@ type Usage struct {
 
 	// TotalTokens is the sum of prompt and completion tokens
 	TotalTokens int `json:"total_tokens"`
+
+	// CachedPromptTokens is the part of PromptTokens served from the prompt cache
+	CachedPromptTokens int `json:"cached_prompt_tokens,omitempty"`
+}
+
+// Add accumulates other into u. A nil other is ignored.
+func (u *Usage) Add(other *Usage) {
+	if other == nil {
+		return
+	}
+	u.PromptTokens += other.PromptTokens
+	u.CompletionTokens += other.CompletionTokens
+	u.TotalTokens += other.TotalTokens
+	u.CachedPromptTokens += other.CachedPromptTokens
 }
 
 // Role constants for message types
@@ -88,11 +109,13 @@ func NewAssistantMessage(content string) Message {
 }
 
 // NewAssistantMessageWithToolCalls creates an assistant message with tool calls.
-// Used when the assistant wants to execute one or more tools.
-func NewAssistantMessageWithToolCalls(toolCalls []ToolCall) Message {
+// Used when the assistant wants to execute one or more tools. providerItems
+// are the opaque provider items from the same response; they may be nil.
+func NewAssistantMessageWithToolCalls(toolCalls []ToolCall, providerItems []json.RawMessage) Message {
 	return Message{
-		Role:      RoleAssistant,
-		ToolCalls: toolCalls,
+		Role:          RoleAssistant,
+		ToolCalls:     toolCalls,
+		ProviderItems: providerItems,
 	}
 }
 

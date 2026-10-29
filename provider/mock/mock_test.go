@@ -4,52 +4,39 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dhargitai/goai/message"
-	"github.com/dhargitai/goai/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dhargitai/goai/message"
+	"github.com/dhargitai/goai/provider"
 )
 
 func TestNew(t *testing.T) {
 	p := New()
-	require.NotNil(t, p)
 	assert.Equal(t, "mock-model", p.Name())
 	assert.NotNil(t, p.Response)
-}
-
-func TestProvider_Name(t *testing.T) {
-	p := &Provider{ModelName: "test-model"}
-	assert.Equal(t, "test-model", p.Name())
 }
 
 func TestProvider_Request(t *testing.T) {
 	tests := []struct {
 		name    string
 		setup   func(*Provider)
+		want    string
 		wantErr bool
 	}{
 		{
-			name: "successful request",
-			setup: func(p *Provider) {
-				p.Response = &provider.Response{
-					Content:      "Test response",
-					FinishReason: "stop",
-				}
-			},
-			wantErr: false,
+			name:  "configured response",
+			setup: func(p *Provider) { p.WithResponse(&provider.Response{Content: "Test response"}) },
+			want:  "Test response",
 		},
 		{
-			name: "error response",
-			setup: func(p *Provider) {
-				p.Err = assert.AnError
-			},
+			name:    "error",
+			setup:   func(p *Provider) { p.WithError(assert.AnError) },
 			wantErr: true,
 		},
 		{
-			name: "no response configured",
-			setup: func(p *Provider) {
-				p.Response = nil
-			},
+			name:    "no response configured",
+			setup:   func(p *Provider) { p.Response = nil },
 			wantErr: true,
 		},
 	}
@@ -59,189 +46,114 @@ func TestProvider_Request(t *testing.T) {
 			p := New()
 			tt.setup(p)
 
-			req := &provider.Request{
-				Messages: []message.Message{
-					{Role: "user", Content: "test"},
-				},
-			}
-
-			resp, err := p.Request(context.Background(), req)
+			resp, err := p.Request(context.Background(), &provider.Request{})
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
 			}
-
 			require.NoError(t, err)
-			require.NotNil(t, resp)
-			assert.NotEmpty(t, resp.Content)
+			assert.Equal(t, tt.want, resp.Content)
 		})
 	}
 }
 
-func TestProvider_Request_WithCallback(t *testing.T) {
-	var capturedReq *provider.Request
+func TestProvider_ResponsesQueue(t *testing.T) {
+	p := New().
+		WithResponses(&provider.Response{Content: "first"}, &provider.Response{Content: "second"}).
+		WithResponse(&provider.Response{Content: "fallback"})
 
-	p := New()
-	p.RequestCallback = func(ctx context.Context, req *provider.Request) {
-		capturedReq = req
+	var got []string
+	for range 4 {
+		resp, err := p.Request(context.Background(), &provider.Request{})
+		require.NoError(t, err)
+		got = append(got, resp.Content)
 	}
 
-	req := &provider.Request{
-		Messages: []message.Message{
-			{Role: "user", Content: "test"},
-		},
-	}
+	assert.Equal(t, []string{"first", "second", "fallback", "fallback"}, got)
+	assert.Len(t, p.Requests, 4)
+}
 
-	_, err := p.Request(context.Background(), req)
+func TestProvider_RequestCallback(t *testing.T) {
+	var calls int
+	p := New().WithRequestCallback(func(ctx context.Context, req *provider.Request) { calls++ })
+
+	_, err := p.Request(context.Background(), &provider.Request{})
 	require.NoError(t, err)
-	assert.Equal(t, req, capturedReq)
+	for _, err := range p.Stream(context.Background(), &provider.Request{}) {
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, 2, calls)
 }
 
 func TestProvider_Stream(t *testing.T) {
 	p := New()
-	p.StreamChunks = []*provider.Chunk{
-		{Content: "Hello"},
-		{Content: " "},
-		{Content: "World"},
-	}
-	p.StreamResponse = &provider.Response{
-		Content:      "Hello World",
-		FinishReason: "stop",
+	p.SetStreamResponse("Hello, world!")
+
+	var pieces []string
+	var final *provider.Response
+	for chunk, err := range p.Stream(context.Background(), &provider.Request{}) {
+		require.NoError(t, err)
+		if chunk.Response != nil {
+			final = chunk.Response
+			continue
+		}
+		pieces = append(pieces, chunk.Content)
 	}
 
-	req := &provider.Request{
-		Messages: []message.Message{
-			{Role: "user", Content: "test"},
-		},
-	}
+	assert.Equal(t, []string{"Hello", ", wor", "ld!"}, pieces)
+	require.NotNil(t, final)
+	assert.Equal(t, "Hello, world!", final.Content)
+}
 
-	resp, err := p.Stream(context.Background(), req)
+func TestProvider_Stream_Error(t *testing.T) {
+	p := New().WithError(assert.AnError)
+
+	var errs []error
+	for _, err := range p.Stream(context.Background(), &provider.Request{}) {
+		errs = append(errs, err)
+	}
+	assert.Equal(t, []error{assert.AnError}, errs)
+}
+
+func TestProvider_Stream_CancelledContext(t *testing.T) {
+	p := New()
+	p.SetStreamResponse("some content")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var lastErr error
+	for _, err := range p.Stream(ctx, &provider.Request{}) {
+		lastErr = err
+	}
+	assert.ErrorIs(t, lastErr, context.Canceled)
+}
+
+func TestProvider_Stream_EarlyBreak(t *testing.T) {
+	p := New()
+	p.SetStreamResponse("abcdefghijklmnop")
+
+	count := 0
+	for _, err := range p.Stream(context.Background(), &provider.Request{}) {
+		require.NoError(t, err)
+		count++
+		break
+	}
+	assert.Equal(t, 1, count)
+}
+
+func TestProvider_SetStreamToolCall(t *testing.T) {
+	p := New()
+	p.SetStreamToolCall("search", `{"query":"go"}`)
+
+	resp, err := p.Request(context.Background(), &provider.Request{})
 	require.NoError(t, err)
-	require.NotNil(t, resp)
-
-	// Collect chunks
-	var chunks []*provider.Chunk
-	for chunk := range resp.Chunks {
-		chunks = append(chunks, chunk)
-	}
-
-	assert.Len(t, chunks, 3)
-	assert.Equal(t, "Hello", chunks[0].Content)
-	assert.Equal(t, " ", chunks[1].Content)
-	assert.Equal(t, "World", chunks[2].Content)
-
-	// Get final response
-	finalResp := <-resp.Done
-	require.NotNil(t, finalResp)
-	assert.Equal(t, "Hello World", finalResp.Content)
-}
-
-func TestProvider_Stream_WithError(t *testing.T) {
-	p := New()
-	p.Err = assert.AnError
-
-	req := &provider.Request{
-		Messages: []message.Message{
-			{Role: "user", Content: "test"},
-		},
-	}
-
-	_, err := p.Stream(context.Background(), req)
-	assert.Error(t, err)
-}
-
-func TestProvider_Stream_WithCallback(t *testing.T) {
-	var capturedReq *provider.Request
-
-	p := New()
-	p.StreamCallback = func(ctx context.Context, req *provider.Request) {
-		capturedReq = req
-	}
-	p.StreamChunks = []*provider.Chunk{{Content: "test"}}
-	p.StreamResponse = &provider.Response{Content: "test"}
-
-	req := &provider.Request{
-		Messages: []message.Message{
-			{Role: "user", Content: "test"},
-		},
-	}
-
-	resp, err := p.Stream(context.Background(), req)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-
-	// Drain channels
-	for range resp.Chunks {
-	}
-	<-resp.Done
-
-	assert.Equal(t, req, capturedReq)
-}
-
-func TestProvider_WithResponse(t *testing.T) {
-	p := New()
-	customResp := &provider.Response{
-		Content: "Custom response",
-	}
-
-	p.WithResponse(customResp)
-	assert.Equal(t, customResp, p.Response)
+	require.Len(t, resp.ToolCalls, 1)
+	assert.Equal(t, message.FunctionCall{Name: "search", Arguments: `{"query":"go"}`}, resp.ToolCalls[0].Function)
 }
 
 func TestProvider_WithToolCalls(t *testing.T) {
-	p := New()
-	toolCalls := []message.ToolCall{
-		{
-			ID:   "call_123",
-			Type: "function",
-			Function: message.FunctionCall{
-				Name:      "test_tool",
-				Arguments: `{"arg":"value"}`,
-			},
-		},
-	}
-
-	p.WithToolCalls(toolCalls)
-	assert.Equal(t, toolCalls, p.Response.ToolCalls)
-}
-
-func TestProvider_WithError(t *testing.T) {
-	p := New()
-	testErr := assert.AnError
-
-	p.WithError(testErr)
-	assert.Equal(t, testErr, p.Err)
-}
-
-func TestProvider_WithStreamChunks(t *testing.T) {
-	p := New()
-	chunks := []*provider.Chunk{
-		{Content: "chunk1"},
-		{Content: "chunk2"},
-	}
-
-	p.WithStreamChunks(chunks)
-	assert.Equal(t, chunks, p.StreamChunks)
-}
-
-func TestProvider_WithStreamResponse(t *testing.T) {
-	p := New()
-	resp := &provider.Response{
-		Content: "Final response",
-	}
-
-	p.WithStreamResponse(resp)
-	assert.Equal(t, resp, p.StreamResponse)
-}
-
-func TestProvider_ChainedConfiguration(t *testing.T) {
-	// Test that fluent API works correctly
-	p := New().
-		WithResponse(&provider.Response{Content: "test"}).
-		WithError(assert.AnError).
-		WithStreamChunks([]*provider.Chunk{{Content: "chunk"}})
-
-	assert.NotNil(t, p.Response)
-	assert.NotNil(t, p.Err)
-	assert.Len(t, p.StreamChunks, 1)
+	calls := []message.ToolCall{{ID: "c1", Function: message.FunctionCall{Name: "t"}}}
+	p := (&Provider{}).WithToolCalls(calls)
+	assert.Equal(t, calls, p.Response.ToolCalls)
 }

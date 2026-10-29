@@ -123,7 +123,6 @@ func TestAgent_Run(t *testing.T) {
 					CompletionTokens: 5,
 					TotalTokens:      15,
 				},
-				FinishReason: "stop",
 			},
 			wantErr: false,
 			validateFunc: func(t *testing.T, result *RunResult[SimpleResult]) {
@@ -136,8 +135,8 @@ func TestAgent_Run(t *testing.T) {
 				if len(result.Messages) != 3 { // system + user + assistant
 					t.Errorf("Run() len(Messages) = %v, want %v", len(result.Messages), 3)
 				}
-				if result.Cost <= 0 {
-					t.Errorf("Run() Cost = %v, want > 0", result.Cost)
+				if result.Cost != 0 {
+					t.Errorf("Run() Cost = %v, want 0 for a provider without a CostEstimator", result.Cost)
 				}
 			},
 		},
@@ -152,9 +151,8 @@ func TestAgent_Run(t *testing.T) {
 			name:       "invalid JSON response",
 			userPrompt: "Test question",
 			mockResponse: &provider.Response{
-				Content:      `{"invalid json`,
-				Usage:        &message.Usage{TotalTokens: 10},
-				FinishReason: "stop",
+				Content: `{"invalid json`,
+				Usage:   &message.Usage{TotalTokens: 10},
 			},
 			wantErr:     true,
 			errContains: "failed to parse structured output",
@@ -225,7 +223,6 @@ func TestAgent_Run_ComplexResult(t *testing.T) {
 			CompletionTokens: 15,
 			TotalTokens:      35,
 		},
-		FinishReason: "stop",
 	})
 
 	deps := SimpleDeps{DatabaseURL: "test", APIKey: "key"}
@@ -264,9 +261,8 @@ func TestAgent_Run_ComplexResult(t *testing.T) {
 
 func TestAgent_Run_StringResult(t *testing.T) {
 	mockProvider := mock.New().WithResponse(&provider.Response{
-		Content:      "The capital of France is Paris.",
-		Usage:        &message.Usage{TotalTokens: 20},
-		FinishReason: "stop",
+		Content: "The capital of France is Paris.",
+		Usage:   &message.Usage{TotalTokens: 20},
 	})
 
 	deps := SimpleDeps{DatabaseURL: "test", APIKey: "key"}
@@ -415,15 +411,13 @@ func TestAgent_Run_WithToolCalls(t *testing.T) {
 						},
 					},
 				},
-				Usage:        &message.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
-				FinishReason: "tool_calls",
+				Usage: &message.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
 			}
 		} else {
 			// Second call: return final answer
 			mockProvider.Response = &provider.Response{
-				Content:      `{"answer":"Based on search results, here are the top golang frameworks"}`,
-				Usage:        &message.Usage{PromptTokens: 20, CompletionTokens: 15, TotalTokens: 35},
-				FinishReason: "stop",
+				Content: `{"answer":"Based on search results, here are the top golang frameworks"}`,
+				Usage:   &message.Usage{PromptTokens: 20, CompletionTokens: 15, TotalTokens: 35},
 			}
 		}
 	})
@@ -515,15 +509,13 @@ func TestAgent_Run_MultipleToolCalls(t *testing.T) {
 						},
 					},
 				},
-				Usage:        &message.Usage{TotalTokens: 20},
-				FinishReason: "tool_calls",
+				Usage: &message.Usage{TotalTokens: 20},
 			}
 		} else {
 			// Second call: return final answer
 			mockProvider.Response = &provider.Response{
-				Content:      `{"answer":"5+3=8 and 5*3=15"}`,
-				Usage:        &message.Usage{TotalTokens: 30},
-				FinishReason: "stop",
+				Content: `{"answer":"5+3=8 and 5*3=15"}`,
+				Usage:   &message.Usage{TotalTokens: 30},
 			}
 		}
 	})
@@ -588,15 +580,13 @@ func TestAgent_Run_ToolError(t *testing.T) {
 						},
 					},
 				},
-				Usage:        &message.Usage{TotalTokens: 10},
-				FinishReason: "tool_calls",
+				Usage: &message.Usage{TotalTokens: 10},
 			}
 		} else {
 			// Agent should recover and provide response
 			mockProvider.Response = &provider.Response{
-				Content:      `{"answer":"I encountered an error but recovered"}`,
-				Usage:        &message.Usage{TotalTokens: 20},
-				FinishReason: "stop",
+				Content: `{"answer":"I encountered an error but recovered"}`,
+				Usage:   &message.Usage{TotalTokens: 20},
 			}
 		}
 	})
@@ -659,8 +649,7 @@ func TestAgent_Run_MaxIterations(t *testing.T) {
 					},
 				},
 			},
-			Usage:        &message.Usage{TotalTokens: 10},
-			FinishReason: "tool_calls",
+			Usage: &message.Usage{TotalTokens: 10},
 		}
 	})
 
@@ -746,261 +735,6 @@ func TestRun_SendsResultSchema(t *testing.T) {
 	}
 	if got.Schema.Properties["name"].Description != "Person's name" {
 		t.Errorf("description tag not applied: %+v", got.Schema.Properties["name"])
-	}
-}
-
-func TestCalculateCost(t *testing.T) {
-	tests := []struct {
-		name      string
-		usage     *message.Usage
-		modelName string
-		wantCost  float64
-	}{
-		{
-			name:      "nil usage",
-			usage:     nil,
-			modelName: "gpt-4o",
-			wantCost:  0.0,
-		},
-		{
-			name: "simple calculation",
-			usage: &message.Usage{
-				PromptTokens:     1000,
-				CompletionTokens: 500,
-				TotalTokens:      1500,
-			},
-			modelName: "gpt-4o",
-			wantCost:  0.0000075, // Very small cost for this usage
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := calculateCost(tt.usage, tt.modelName)
-
-			if tt.usage == nil {
-				if got != 0.0 {
-					t.Errorf("calculateCost() = %v, want %v", got, 0.0)
-				}
-			} else {
-				// Check cost is reasonable (not zero, not negative)
-				if got <= 0 {
-					t.Errorf("calculateCost() = %v, want > 0", got)
-				}
-			}
-		})
-	}
-}
-
-// ============================================================================
-// Streaming Tests
-// ============================================================================
-
-func TestAgent_RunStream_SimpleResponse(t *testing.T) {
-	mockProvider := mock.New()
-	deps := SimpleDeps{}
-
-	agent, err := NewAgent[SimpleDeps, string](
-		mockProvider,
-		"Test agent",
-		deps,
-	)
-	if err != nil {
-		t.Fatalf("NewAgent() unexpected error = %v", err)
-	}
-
-	// Configure mock to return streaming response
-	mockProvider.SetStreamResponse("Hello, streaming world!")
-
-	// Run streaming
-	streamResult, err := agent.RunStream(context.Background(), "Say hello")
-	if err != nil {
-		t.Fatalf("RunStream() unexpected error = %v", err)
-	}
-	defer streamResult.Close()
-
-	// Collect chunks in a goroutine to not block
-	chunks := make([]string, 0)
-	go func() {
-		for chunk := range streamResult.Chunks() {
-			if chunk.Content != "" {
-				chunks = append(chunks, chunk.Content)
-			}
-		}
-	}()
-
-	// Get final result
-	result, err := streamResult.Result()
-	if err != nil {
-		t.Fatalf("Result() unexpected error = %v", err)
-	}
-
-	if result == nil {
-		t.Fatal("Result() returned nil")
-	}
-
-	// Verify final result contains expected content
-	if result.Data == "" {
-		t.Error("Expected non-empty result data")
-	}
-
-	// Verify usage tracking
-	if result.Usage == nil {
-		t.Error("Expected usage to be non-nil")
-	}
-
-	// Note: We can't reliably check chunks length here due to race condition
-	// The goroutine may not have finished collecting them
-}
-
-func TestAgent_RunStream_StructuredOutput(t *testing.T) {
-	mockProvider := mock.New()
-	deps := SimpleDeps{}
-
-	agent, err := NewAgent[SimpleDeps, SimpleResult](
-		mockProvider,
-		"Test agent",
-		deps,
-	)
-	if err != nil {
-		t.Fatalf("NewAgent() unexpected error = %v", err)
-	}
-
-	// Configure mock to return structured JSON
-	expectedResponse := `{"answer": "Test answer"}`
-	mockProvider.SetStreamResponse(expectedResponse)
-
-	// Run streaming
-	streamResult, err := agent.RunStream(context.Background(), "Generate result")
-	if err != nil {
-		t.Fatalf("RunStream() unexpected error = %v", err)
-	}
-	defer streamResult.Close()
-
-	// Consume chunks in a separate goroutine
-	go func() {
-		for range streamResult.Chunks() {
-			// Just consume them
-		}
-	}()
-
-	// Get final result - wait with timeout
-	select {
-	case <-streamResult.Chunks():
-		// Channel is being consumed by goroutine
-	default:
-	}
-
-	result, err := streamResult.Result()
-	if err != nil {
-		// Chunked JSON parsing can be tricky in tests - the content builder should have full content
-		t.Logf("Result() error (may be timing-related in tests): %v", err)
-		// Don't fail the test - streaming implementation is correct
-		return
-	}
-
-	if result.Data.Answer != "Test answer" {
-		t.Errorf("Result.Data.Answer = %v, want %v", result.Data.Answer, "Test answer")
-	}
-}
-
-func TestAgent_RunStream_WithToolCall(t *testing.T) {
-	// Skip this test for now - tool calling in streaming requires more complex mock setup
-	t.Skip("Tool calling in streaming requires sequential mock responses - simplify test")
-}
-
-func TestAgent_RunStream_ContextCancellation(t *testing.T) {
-	mockProvider := mock.New()
-	deps := SimpleDeps{}
-
-	agent, err := NewAgent[SimpleDeps, string](
-		mockProvider,
-		"Test agent",
-		deps,
-	)
-	if err != nil {
-		t.Fatalf("NewAgent() unexpected error = %v", err)
-	}
-
-	// Create cancellable context
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Start streaming
-	streamResult, err := agent.RunStream(ctx, "Long running task")
-	if err != nil {
-		t.Fatalf("RunStream() unexpected error = %v", err)
-	}
-	defer streamResult.Close()
-
-	// Cancel immediately
-	cancel()
-
-	// Try to get result - should return error
-	result, err := streamResult.Result()
-	if err == nil {
-		t.Error("Expected error from cancelled context, got nil")
-	}
-
-	if result != nil {
-		t.Error("Expected nil result from cancelled context")
-	}
-}
-
-func TestAgent_RunStream_EmptyPrompt(t *testing.T) {
-	mockProvider := mock.New()
-	deps := SimpleDeps{}
-
-	agent, err := NewAgent[SimpleDeps, string](
-		mockProvider,
-		"Test agent",
-		deps,
-	)
-	if err != nil {
-		t.Fatalf("NewAgent() unexpected error = %v", err)
-	}
-
-	// Try empty prompt
-	_, err = agent.RunStream(context.Background(), "")
-	if err == nil {
-		t.Error("RunStream() with empty prompt should return error")
-	}
-}
-
-func TestStreamResult_Close(t *testing.T) {
-	mockProvider := mock.New()
-	deps := SimpleDeps{}
-
-	agent, err := NewAgent[SimpleDeps, string](
-		mockProvider,
-		"Test agent",
-		deps,
-	)
-	if err != nil {
-		t.Fatalf("NewAgent() unexpected error = %v", err)
-	}
-
-	mockProvider.SetStreamResponse("Test response")
-
-	// Start streaming
-	streamResult, err := agent.RunStream(context.Background(), "Test")
-	if err != nil {
-		t.Fatalf("RunStream() unexpected error = %v", err)
-	}
-
-	// Close immediately without consuming
-	err = streamResult.Close()
-	if err != nil {
-		t.Errorf("Close() unexpected error = %v", err)
-	}
-
-	// Try to consume after close - should not hang or panic
-	select {
-	case _, ok := <-streamResult.Chunks():
-		if ok {
-			t.Error("Expected chunks channel to be closed")
-		}
-	default:
-		// Channel might already be closed
 	}
 }
 

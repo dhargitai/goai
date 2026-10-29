@@ -4,43 +4,51 @@ package mock
 import (
 	"context"
 	"fmt"
+	"iter"
+	"sync"
 
 	"github.com/dhargitai/goai/message"
 	"github.com/dhargitai/goai/provider"
 )
 
+// defaultChunkSize is how many bytes of content each streamed chunk carries.
+const defaultChunkSize = 5
+
 // Provider is a mock implementation of provider.Provider for testing.
-// It allows configuring responses, tool calls, errors, and streaming behavior.
+// Request and Stream return the queued Responses in order; once the queue is
+// empty they keep returning Response.
 type Provider struct {
 	// ModelName is the model identifier to return
 	ModelName string
 
-	// Response configures the response for Request() calls
+	// Response is returned when the Responses queue is empty
 	Response *provider.Response
 
-	// StreamChunks configures the chunks for Stream() calls
-	StreamChunks []*provider.Chunk
-
-	// StreamResponse configures the final response for Stream() calls
-	StreamResponse *provider.Response
+	// Responses is a queue of responses returned by successive calls
+	Responses []*provider.Response
 
 	// Err configures an error to return
 	Err error
 
-	// RequestCallback is called when Request() is invoked
+	// ChunkSize is how many bytes of content each streamed chunk carries
+	ChunkSize int
+
+	// RequestCallback is called on every Request() and Stream() call
 	RequestCallback func(ctx context.Context, req *provider.Request)
 
-	// StreamCallback is called when Stream() is invoked
-	StreamCallback func(ctx context.Context, req *provider.Request)
+	// Requests records every request received, in order
+	Requests []*provider.Request
+
+	mu sync.Mutex
 }
 
 // New creates a new mock provider with default values.
 func New() *Provider {
 	return &Provider{
 		ModelName: "mock-model",
+		ChunkSize: defaultChunkSize,
 		Response: &provider.Response{
-			Content:      "Mock response",
-			FinishReason: "stop",
+			Content: "Mock response",
 			Usage: &message.Usage{
 				PromptTokens:     10,
 				CompletionTokens: 5,
@@ -57,81 +65,74 @@ func (p *Provider) Name() string {
 
 // Request performs a mock request.
 func (p *Provider) Request(ctx context.Context, req *provider.Request) (*provider.Response, error) {
+	return p.next(ctx, req)
+}
+
+// Stream performs a mock streaming request. It yields the response content in
+// ChunkSize pieces, then a final chunk carrying the whole response.
+func (p *Provider) Stream(ctx context.Context, req *provider.Request) iter.Seq2[*provider.Chunk, error] {
+	return func(yield func(*provider.Chunk, error) bool) {
+		resp, err := p.next(ctx, req)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		for _, piece := range splitContent(resp.Content, p.ChunkSize) {
+			if err := ctx.Err(); err != nil {
+				yield(nil, err)
+				return
+			}
+			if !yield(&provider.Chunk{Content: piece}, nil) {
+				return
+			}
+		}
+		yield(&provider.Chunk{Response: resp}, nil)
+	}
+}
+
+func (p *Provider) next(ctx context.Context, req *provider.Request) (*provider.Response, error) {
 	if p.RequestCallback != nil {
 		p.RequestCallback(ctx, req)
 	}
 
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.Requests = append(p.Requests, req)
+
 	if p.Err != nil {
 		return nil, p.Err
 	}
-
+	if len(p.Responses) > 0 {
+		resp := p.Responses[0]
+		p.Responses = p.Responses[1:]
+		return resp, nil
+	}
 	if p.Response == nil {
 		return nil, fmt.Errorf("mock provider: no response configured")
 	}
-
 	return p.Response, nil
 }
 
-// Stream performs a mock streaming request.
-func (p *Provider) Stream(ctx context.Context, req *provider.Request) (*provider.StreamResponse, error) {
-	if p.StreamCallback != nil {
-		p.StreamCallback(ctx, req)
+func splitContent(content string, size int) []string {
+	if size <= 0 {
+		size = defaultChunkSize
 	}
-
-	if p.Err != nil {
-		return nil, p.Err
+	var pieces []string
+	for i := 0; i < len(content); i += size {
+		pieces = append(pieces, content[i:min(i+size, len(content))])
 	}
-
-	// Create cancellable context
-	streamCtx, cancel := context.WithCancel(ctx)
-
-	// Create channels
-	chunks := make(chan *provider.Chunk, len(p.StreamChunks))
-	done := make(chan *provider.Response, 1)
-	errCh := make(chan error, 1)
-
-	// Send chunks and response
-	go func() {
-		defer close(chunks)
-		defer close(done)
-		defer close(errCh)
-
-		// Send chunks
-		for _, chunk := range p.StreamChunks {
-			select {
-			case <-streamCtx.Done():
-				return
-			case chunks <- chunk:
-			}
-		}
-
-		// Send final response
-		if p.StreamResponse != nil {
-			select {
-			case <-streamCtx.Done():
-				return
-			case done <- p.StreamResponse:
-			}
-		}
-	}()
-
-	resp := &provider.StreamResponse{
-		Chunks: chunks,
-		Done:   done,
-		Err:    errCh,
-	}
-
-	// Use reflection to set the cancel function
-	// This is a bit of a hack, but necessary since cancel is private
-	// In real usage, the StreamResponse would handle this internally
-	_ = cancel
-
-	return resp, nil
+	return pieces
 }
 
-// WithResponse configures the mock response.
+// WithResponse configures the response returned once the queue is empty.
 func (p *Provider) WithResponse(resp *provider.Response) *Provider {
 	p.Response = resp
+	return p
+}
+
+// WithResponses queues responses returned by successive calls.
+func (p *Provider) WithResponses(resps ...*provider.Response) *Provider {
+	p.Responses = append(p.Responses, resps...)
 	return p
 }
 
@@ -150,53 +151,16 @@ func (p *Provider) WithError(err error) *Provider {
 	return p
 }
 
-// WithStreamChunks configures streaming chunks.
-func (p *Provider) WithStreamChunks(chunks []*provider.Chunk) *Provider {
-	p.StreamChunks = chunks
-	return p
-}
-
-// WithStreamResponse configures the final streaming response.
-func (p *Provider) WithStreamResponse(resp *provider.Response) *Provider {
-	p.StreamResponse = resp
-	return p
-}
-
-// WithRequestCallback sets a callback for Request() calls.
+// WithRequestCallback sets a callback for Request() and Stream() calls.
 func (p *Provider) WithRequestCallback(fn func(ctx context.Context, req *provider.Request)) *Provider {
 	p.RequestCallback = fn
 	return p
 }
 
-// WithStreamCallback sets a callback for Stream() calls.
-func (p *Provider) WithStreamCallback(fn func(ctx context.Context, req *provider.Request)) *Provider {
-	p.StreamCallback = fn
-	return p
-}
-
-// SetStreamResponse is a helper to quickly configure streaming with chunked content.
-// It breaks the response into 5-character chunks for testing streaming behavior.
+// SetStreamResponse configures a text response with rough usage numbers.
 func (p *Provider) SetStreamResponse(content string) {
-	// Break content into chunks for realistic streaming
-	chunkSize := 5
-	var chunks []*provider.Chunk
-
-	for i := 0; i < len(content); i += chunkSize {
-		end := min(i+chunkSize, len(content))
-		chunks = append(chunks, &provider.Chunk{
-			Content: content[i:end],
-		})
-	}
-
-	// Add finish reason to last chunk
-	if len(chunks) > 0 {
-		chunks[len(chunks)-1].FinishReason = "stop"
-	}
-
-	p.StreamChunks = chunks
-	p.StreamResponse = &provider.Response{
-		Content:      content,
-		FinishReason: "stop",
+	p.Response = &provider.Response{
+		Content: content,
 		Usage: &message.Usage{
 			PromptTokens:     10,
 			CompletionTokens: len(content) / 4, // Rough token estimate
@@ -205,28 +169,17 @@ func (p *Provider) SetStreamResponse(content string) {
 	}
 }
 
-// SetStreamToolCall configures a streaming response with a tool call.
-// This simulates the model requesting to call a tool.
+// SetStreamToolCall configures a response in which the model calls a tool.
 func (p *Provider) SetStreamToolCall(toolName string, toolArgs string) {
-	toolCall := message.ToolCall{
-		ID:   "call_123",
-		Type: "function",
-		Function: message.FunctionCall{
-			Name:      toolName,
-			Arguments: toolArgs,
-		},
-	}
-
-	// Send tool call as chunk
-	p.StreamChunks = []*provider.Chunk{
-		{
-			ToolCall: &toolCall,
-		},
-	}
-
-	p.StreamResponse = &provider.Response{
-		ToolCalls:    []message.ToolCall{toolCall},
-		FinishReason: "tool_calls",
+	p.Response = &provider.Response{
+		ToolCalls: []message.ToolCall{{
+			ID:   "call_123",
+			Type: "function",
+			Function: message.FunctionCall{
+				Name:      toolName,
+				Arguments: toolArgs,
+			},
+		}},
 		Usage: &message.Usage{
 			PromptTokens:     10,
 			CompletionTokens: 5,

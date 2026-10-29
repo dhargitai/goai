@@ -1,27 +1,55 @@
-// Package openai provides an OpenAI implementation of the provider.Provider interface.
+// Package openai provides an OpenAI implementation of the provider.Provider
+// interface, built on the official SDK and the Responses API.
+//
+// Requests are stateless: every call sends the full conversation with
+// store=false, so nothing is retained on OpenAI's side and Zero Data Retention
+// accounts work. For reasoning models, encrypted reasoning items are requested
+// and replayed between turns of a run.
+//
+// Supported models are gpt-4o and newer: the gpt-4o and gpt-4.1 families,
+// the o-series, and GPT-5 and later.
 package openai
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"iter"
+	"net/http"
 	"os"
+
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/dhargitai/goai/message"
 	"github.com/dhargitai/goai/provider"
-	"github.com/dhargitai/goai/tool"
-	openai "github.com/sashabaranov/go-openai"
 )
+
+// DefaultModel is the model used when neither WithModel nor OPENAI_MODEL is set.
+const DefaultModel = openai.ChatModelGPT6_1Sol
 
 // Config holds configuration for the OpenAI client.
 // Use functional options with New() to configure the client.
 type Config struct {
-	// Model is the OpenAI model to use (e.g., "gpt-4", "gpt-4o", "gpt-3.5-turbo")
-	// Default: reads from OPENAI_MODEL env var, falls back to "gpt-4o"
+	// Model is the OpenAI model to use (e.g., "gpt-4o", "gpt-4.1", "gpt-6.1-sol").
+	// Default: reads from OPENAI_MODEL env var, falls back to DefaultModel
 	Model string
 
 	// APIKey is the OpenAI API key for authentication
 	// Default: reads from OPENAI_API_KEY env var (required)
 	APIKey string
+
+	// BaseURL overrides the API endpoint, e.g. for proxies or compatible servers
+	BaseURL string
+
+	// HTTPClient overrides the HTTP client used for requests
+	HTTPClient *http.Client
+
+	// ReasoningEffort sets the reasoning effort ("none", "minimal", "low",
+	// "medium", "high", "xhigh", "max") for reasoning models. It is ignored
+	// for non-reasoning models such as gpt-4o.
+	ReasoningEffort string
 }
 
 // Option is a functional option for configuring the Client.
@@ -32,7 +60,7 @@ type Option func(*Config)
 //
 // Example:
 //
-//	provider, err := openai.New(openai.WithModel("gpt-4-turbo"))
+//	provider, err := openai.New(openai.WithModel("gpt-4o"))
 func WithModel(model string) Option {
 	return func(c *Config) {
 		c.Model = model
@@ -41,7 +69,6 @@ func WithModel(model string) Option {
 
 // WithAPIKey explicitly sets the API key.
 // This overrides the OPENAI_API_KEY environment variable.
-// Useful for testing or when you want to provide the key programmatically.
 //
 // Example:
 //
@@ -52,53 +79,62 @@ func WithAPIKey(apiKey string) Option {
 	}
 }
 
-// Client implements provider.Provider for OpenAI's API.
+// WithBaseURL overrides the API endpoint.
+func WithBaseURL(baseURL string) Option {
+	return func(c *Config) {
+		c.BaseURL = baseURL
+	}
+}
+
+// WithHTTPClient overrides the HTTP client used for requests.
+func WithHTTPClient(client *http.Client) Option {
+	return func(c *Config) {
+		c.HTTPClient = client
+	}
+}
+
+// WithReasoningEffort sets the reasoning effort for reasoning models.
+// It is ignored for non-reasoning models.
+func WithReasoningEffort(effort string) Option {
+	return func(c *Config) {
+		c.ReasoningEffort = effort
+	}
+}
+
+// Client implements provider.Provider for OpenAI's Responses API.
 type Client struct {
-	client *openai.Client
-	model  string
+	client          openai.Client
+	model           string
+	reasoningEffort string
 }
 
 // New creates a new OpenAI provider client with functional options.
 //
 // By default, New reads configuration from environment variables:
 //   - OPENAI_API_KEY (required): Your OpenAI API key
-//   - OPENAI_MODEL (optional): Model to use, defaults to "gpt-4o"
+//   - OPENAI_MODEL (optional): Model to use, defaults to DefaultModel
 //
-// You can override these defaults using functional options:
-//   - WithModel(model): Override the model
-//   - WithAPIKey(key): Override the API key
+// Options override the environment.
 //
 // Examples:
 //
 //	// Simplest - reads from environment
 //	provider, err := openai.New()
 //
-//	// Override model only
-//	provider, err := openai.New(openai.WithModel("gpt-4-turbo"))
-//
-//	// Override both
-//	provider, err := openai.New(
-//	    openai.WithModel("gpt-4-turbo"),
-//	    openai.WithAPIKey("sk-..."),
-//	)
+//	// Use an older, non-reasoning model
+//	provider, err := openai.New(openai.WithModel("gpt-4o"))
 func New(opts ...Option) (*Client, error) {
-	// Start with environment variable defaults
 	cfg := &Config{
 		Model:  os.Getenv("OPENAI_MODEL"),
 		APIKey: os.Getenv("OPENAI_API_KEY"),
 	}
-
-	// Apply default model if not set
 	if cfg.Model == "" {
-		cfg.Model = "gpt-4o"
+		cfg.Model = DefaultModel
 	}
-
-	// Apply all functional options (these override env vars)
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
-	// Validate configuration after all options applied
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf(
 			"OpenAI API key required: set OPENAI_API_KEY environment variable " +
@@ -106,10 +142,18 @@ func New(opts ...Option) (*Client, error) {
 		)
 	}
 
-	// Create and return client (same as before)
+	clientOpts := []option.RequestOption{option.WithAPIKey(cfg.APIKey)}
+	if cfg.BaseURL != "" {
+		clientOpts = append(clientOpts, option.WithBaseURL(cfg.BaseURL))
+	}
+	if cfg.HTTPClient != nil {
+		clientOpts = append(clientOpts, option.WithHTTPClient(cfg.HTTPClient))
+	}
+
 	return &Client{
-		client: openai.NewClient(cfg.APIKey),
-		model:  cfg.Model,
+		client:          openai.NewClient(clientOpts...),
+		model:           cfg.Model,
+		reasoningEffort: cfg.ReasoningEffort,
 	}, nil
 }
 
@@ -118,315 +162,88 @@ func (c *Client) Name() string {
 	return c.model
 }
 
-// Request performs a single chat completion request.
+// EstimateCost returns the estimated USD cost of usage on this client's model,
+// or 0 if the model's price is unknown.
+func (c *Client) EstimateCost(usage *message.Usage) float64 {
+	return estimateCost(c.model, usage)
+}
+
+// Request performs a single Responses API request.
 func (c *Client) Request(ctx context.Context, req *provider.Request) (*provider.Response, error) {
 	if req == nil {
 		return nil, fmt.Errorf("request cannot be nil")
 	}
-
-	// Convert messages
-	msgs, err := convertMessages(req.Messages)
+	params, err := c.buildParams(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert messages: %w", err)
+		return nil, err
 	}
 
-	// Build request
-	chatReq := openai.ChatCompletionRequest{
-		Model:    c.model,
-		Messages: msgs,
-	}
-
-	// Set temperature if provided
-	if req.Temperature > 0 {
-		chatReq.Temperature = float32(req.Temperature)
-	}
-
-	// Set max tokens if provided
-	if req.MaxTokens > 0 {
-		chatReq.MaxTokens = req.MaxTokens
-	}
-
-	// Add tools if provided
-	if len(req.Tools) > 0 {
-		chatReq.Tools = convertTools(req.Tools)
-	}
-
-	// Add response format if provided
-	if req.ResponseFormat != nil {
-		chatReq.ResponseFormat = &openai.ChatCompletionResponseFormat{
-			Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
-			JSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
-				Name:   req.ResponseFormat.Name,
-				Schema: req.ResponseFormat.Schema.Strict(),
-				Strict: true,
-			},
-		}
-	}
-
-	// Make request
-	resp, err := c.client.CreateChatCompletion(ctx, chatReq)
+	resp, err := c.client.Responses.New(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("chat completion failed: %w", err)
+		return nil, fmt.Errorf("responses request failed: %w", err)
 	}
-
-	// Convert response
-	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("no choices in response")
-	}
-
-	choice := resp.Choices[0]
-	result := &provider.Response{
-		Content:      choice.Message.Content,
-		FinishReason: string(choice.FinishReason),
-		Usage: &message.Usage{
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
-		},
-	}
-
-	// Convert tool calls if present
-	if len(choice.Message.ToolCalls) > 0 {
-		result.ToolCalls = make([]message.ToolCall, len(choice.Message.ToolCalls))
-		for i, tc := range choice.Message.ToolCalls {
-			result.ToolCalls[i] = message.ToolCall{
-				ID:   tc.ID,
-				Type: string(tc.Type),
-				Function: message.FunctionCall{
-					Name:      tc.Function.Name,
-					Arguments: tc.Function.Arguments,
-				},
-			}
-		}
-	}
-
-	return result, nil
+	return convertResponse(resp)
 }
 
-// Stream performs a streaming chat completion request.
-func (c *Client) Stream(ctx context.Context, req *provider.Request) (*provider.StreamResponse, error) {
-	if req == nil {
-		return nil, fmt.Errorf("request cannot be nil")
-	}
+// Stream performs a streaming Responses API request. It yields text deltas,
+// then a final chunk carrying the complete response. Stopping the iteration
+// early closes the HTTP stream.
+func (c *Client) Stream(ctx context.Context, req *provider.Request) iter.Seq2[*provider.Chunk, error] {
+	return func(yield func(*provider.Chunk, error) bool) {
+		if req == nil {
+			yield(nil, fmt.Errorf("request cannot be nil"))
+			return
+		}
+		params, err := c.buildParams(req)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
 
-	// Convert messages
-	msgs, err := convertMessages(req.Messages)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert messages: %w", err)
-	}
-
-	// Build request
-	chatReq := openai.ChatCompletionRequest{
-		Model:    c.model,
-		Messages: msgs,
-		Stream:   true,
-		// Request usage information in streaming responses
-		StreamOptions: &openai.StreamOptions{
-			IncludeUsage: true,
-		},
-	}
-
-	// Set temperature if provided
-	if req.Temperature > 0 {
-		chatReq.Temperature = float32(req.Temperature)
-	}
-
-	// Set max tokens if provided
-	if req.MaxTokens > 0 {
-		chatReq.MaxTokens = req.MaxTokens
-	}
-
-	// Add tools if provided
-	if len(req.Tools) > 0 {
-		chatReq.Tools = convertTools(req.Tools)
-	}
-
-	// Add response format if provided
-	if req.ResponseFormat != nil {
-		chatReq.ResponseFormat = &openai.ChatCompletionResponseFormat{
-			Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
-			JSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
-				Name:   req.ResponseFormat.Name,
-				Schema: req.ResponseFormat.Schema.Strict(),
-				Strict: true,
-			},
+		stream := c.client.Responses.NewStreaming(ctx, params)
+		final, err := forwardEvents(stream, yield)
+		if closeErr := stream.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close stream: %w", closeErr)
+		}
+		switch {
+		case errors.Is(err, errStopped):
+			return
+		case err != nil:
+			yield(nil, err)
+		default:
+			yield(&provider.Chunk{Response: final}, nil)
 		}
 	}
-
-	// Create cancellable context for cleanup
-	streamCtx, cancel := context.WithCancel(ctx)
-
-	// Create stream
-	stream, err := c.client.CreateChatCompletionStream(streamCtx, chatReq)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create stream: %w", err)
-	}
-
-	// Create channels
-	chunks := make(chan *provider.Chunk, 10)
-	done := make(chan *provider.Response, 1)
-	errCh := make(chan error, 1)
-
-	// Start goroutine to process stream
-	go func() {
-		defer close(chunks)
-		defer close(done)
-		defer close(errCh)
-		defer stream.Close()
-		defer cancel()
-
-		var fullContent string
-		var toolCalls []message.ToolCall
-		var finishReason string
-		var usage *message.Usage
-
-		for {
-			select {
-			case <-streamCtx.Done():
-				return
-			default:
-			}
-
-			chunk, err := stream.Recv()
-			if err != nil {
-				// EOF means stream is done
-				if err.Error() == "EOF" {
-					// Send final response
-					done <- &provider.Response{
-						Content:      fullContent,
-						ToolCalls:    toolCalls,
-						FinishReason: finishReason,
-						Usage:        usage,
-					}
-					return
-				}
-				errCh <- fmt.Errorf("stream error: %w", err)
-				return
-			}
-
-			// Capture usage information if available (may be in chunk without choices)
-			if chunk.Usage != nil {
-				usage = &message.Usage{
-					PromptTokens:     chunk.Usage.PromptTokens,
-					CompletionTokens: chunk.Usage.CompletionTokens,
-					TotalTokens:      chunk.Usage.TotalTokens,
-				}
-			}
-
-			if len(chunk.Choices) == 0 {
-				continue
-			}
-
-			delta := chunk.Choices[0].Delta
-			chunkResp := &provider.Chunk{}
-
-			// Accumulate content
-			if delta.Content != "" {
-				fullContent += delta.Content
-				chunkResp.Content = delta.Content
-			}
-
-			// Handle tool calls
-			if len(delta.ToolCalls) > 0 {
-				for _, tc := range delta.ToolCalls {
-					// Initialize tool calls array if needed
-					if tc.Index != nil && *tc.Index >= len(toolCalls) {
-						toolCalls = append(toolCalls, make([]message.ToolCall, *tc.Index-len(toolCalls)+1)...)
-					}
-
-					idx := 0
-					if tc.Index != nil {
-						idx = *tc.Index
-					}
-
-					// Update or create tool call
-					if tc.ID != "" {
-						toolCalls[idx].ID = tc.ID
-						toolCalls[idx].Type = string(tc.Type)
-					}
-					if tc.Function.Name != "" {
-						toolCalls[idx].Function.Name = tc.Function.Name
-					}
-					if tc.Function.Arguments != "" {
-						toolCalls[idx].Function.Arguments += tc.Function.Arguments
-					}
-
-					chunkResp.ToolCall = &toolCalls[idx]
-				}
-			}
-
-			// Check finish reason
-			if chunk.Choices[0].FinishReason != "" {
-				finishReason = string(chunk.Choices[0].FinishReason)
-				chunkResp.FinishReason = finishReason
-			}
-
-			// Send chunk
-			select {
-			case chunks <- chunkResp:
-			case <-streamCtx.Done():
-				return
-			}
-		}
-	}()
-
-	return &provider.StreamResponse{
-		Chunks: chunks,
-		Done:   done,
-		Err:    errCh,
-	}, nil
 }
 
-// convertMessages converts our message format to OpenAI format.
-func convertMessages(msgs []message.Message) ([]openai.ChatCompletionMessage, error) {
-	result := make([]openai.ChatCompletionMessage, len(msgs))
+// errStopped reports that the consumer stopped iterating.
+var errStopped = errors.New("stream consumer stopped")
 
-	for i, msg := range msgs {
-		result[i] = openai.ChatCompletionMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		}
-
-		// Handle tool calls
-		if len(msg.ToolCalls) > 0 {
-			result[i].ToolCalls = make([]openai.ToolCall, len(msg.ToolCalls))
-			for j, tc := range msg.ToolCalls {
-				result[i].ToolCalls[j] = openai.ToolCall{
-					ID:   tc.ID,
-					Type: openai.ToolType(tc.Type),
-					Function: openai.FunctionCall{
-						Name:      tc.Function.Name,
-						Arguments: tc.Function.Arguments,
-					},
-				}
-			}
-		}
-
-		// Handle tool call ID for tool responses
-		if msg.ToolCallID != "" {
-			result[i].ToolCallID = msg.ToolCallID
-		}
-	}
-
-	return result, nil
+// eventStream is the part of the SDK's SSE stream that forwardEvents uses.
+type eventStream interface {
+	Next() bool
+	Current() responses.ResponseStreamEventUnion
+	Err() error
 }
 
-// convertTools converts our tool definitions to OpenAI format.
-func convertTools(tools []tool.Definition) []openai.Tool {
-	result := make([]openai.Tool, len(tools))
-
-	for i, t := range tools {
-		result[i] = openai.Tool{
-			Type: openai.ToolTypeFunction,
-			Function: &openai.FunctionDefinition{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.Parameters.Strict(),
-				Strict:      true,
-			},
+// forwardEvents yields text deltas until a terminal event, which it converts
+// to the final response.
+func forwardEvents(stream eventStream, yield func(*provider.Chunk, error) bool) (*provider.Response, error) {
+	for stream.Next() {
+		event := stream.Current()
+		switch event.Type {
+		case "response.output_text.delta":
+			if !yield(&provider.Chunk{Content: event.Delta}, nil) {
+				return nil, errStopped
+			}
+		case "response.completed", "response.incomplete", "response.failed":
+			return convertResponse(&event.Response)
+		case "error":
+			return nil, fmt.Errorf("stream error %s: %s", event.Code, event.Message)
 		}
 	}
-
-	return result
+	if err := stream.Err(); err != nil {
+		return nil, fmt.Errorf("stream failed: %w", err)
+	}
+	return nil, fmt.Errorf("stream ended without a final response")
 }

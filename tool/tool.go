@@ -54,58 +54,68 @@ func NewRegistry() *Registry {
 // The function must take context.Context as the first parameter and return
 // (result, error) as the last two return values.
 func (r *Registry) Register(name, description string, handler any) error {
-	if name == "" {
-		return fmt.Errorf("tool name cannot be empty")
-	}
-
-	if r.tools[name] != nil {
-		return fmt.Errorf("tool %s already registered", name)
-	}
-
 	// Validate handler is a function
 	handlerValue := reflect.ValueOf(handler)
-	handlerType := handlerValue.Type()
-
-	if handlerType.Kind() != reflect.Func {
-		return fmt.Errorf("handler must be a function, got %s", handlerType.Kind())
+	if handlerValue.Kind() != reflect.Func {
+		return fmt.Errorf("handler must be a function, got %s", handlerValue.Kind())
 	}
+	handlerType := handlerValue.Type()
 
 	// Validate function signature
 	if err := validateHandlerSignature(handlerType); err != nil {
 		return fmt.Errorf("invalid handler signature: %w", err)
 	}
 
-	// Generate schema from parameters
-	var paramSchema *schema.Schema
-	var err error
-
+	// Generate schema from parameters (the second parameter after context)
+	var argsType reflect.Type
 	if handlerType.NumIn() > 1 {
-		// Get the argument type (second parameter after context)
-		argsType := handlerType.In(1)
-		paramSchema, err = schema.Generate(argsType)
-		if err != nil {
-			return fmt.Errorf("failed to generate schema: %w", err)
-		}
-	} else {
-		// No arguments besides context
-		paramSchema = &schema.Schema{
-			Type:       "object",
-			Properties: make(map[string]*schema.Schema),
-			Required:   []string{},
-		}
+		argsType = handlerType.In(1)
+	}
+	paramSchema, err := ParamsSchema(argsType)
+	if err != nil {
+		return err
 	}
 
-	// Create wrapper handler
-	wrappedHandler := createHandler(handlerValue, handlerType)
+	return r.RegisterHandler(name, description, paramSchema, createHandler(handlerValue, handlerType))
+}
+
+// RegisterHandler adds a tool whose parameter schema is already known.
+// It is used by callers that wrap user handlers themselves, such as the agent.
+func (r *Registry) RegisterHandler(name, description string, params *schema.Schema, handler Handler) error {
+	if name == "" {
+		return fmt.Errorf("tool name cannot be empty")
+	}
+	if r.tools[name] != nil {
+		return fmt.Errorf("tool %s already registered", name)
+	}
+	if params == nil || handler == nil {
+		return fmt.Errorf("tool %s needs a parameter schema and a handler", name)
+	}
 
 	r.tools[name] = &Tool{
 		Name:        name,
 		Description: description,
-		Schema:      paramSchema,
-		Handler:     wrappedHandler,
+		Schema:      params,
+		Handler:     handler,
 	}
-
 	return nil
+}
+
+// ParamsSchema generates the parameter schema for a tool's argument type.
+// A nil argsType means the tool takes no arguments. Tool arguments must be
+// a struct, because models always send them as a JSON object.
+func ParamsSchema(argsType reflect.Type) (*schema.Schema, error) {
+	if argsType == nil {
+		return &schema.Schema{Type: "object", Properties: map[string]*schema.Schema{}}, nil
+	}
+	paramSchema, err := schema.Generate(argsType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate schema: %w", err)
+	}
+	if paramSchema.Type != "object" {
+		return nil, fmt.Errorf("tool arguments must be a struct, got %s", argsType)
+	}
+	return paramSchema, nil
 }
 
 // GetDefinitions returns tool definitions suitable for passing to the LLM.
